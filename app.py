@@ -426,17 +426,95 @@ if st.session_state.page == "input":
 
     language = st.selectbox("Language", ["English","Arabic","English & Arabic","French","Other"])
 
-    section_header("2", "Competitors")
-
-    st.markdown('<div class="exd-alert">Enter up to 3 competitor URLs — or leave blank and AI will suggest them based on your industry and market.</div>', unsafe_allow_html=True)
-
-    c1, c2, c3 = st.columns(3)
-    with c1: comp1 = st.text_input("Competitor 1", placeholder="emaar.com")
-    with c2: comp2 = st.text_input("Competitor 2", placeholder="damac.com")
-    with c3: comp3 = st.text_input("Competitor 3", placeholder="nakheel.com")
-
+    # ── Two-path selection ────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
-    run = st.button("▶  Run Backlink Intelligence", use_container_width=True)
+    section_header("2", "What would you like to do?")
+
+    st.markdown("""
+    <style>
+    .path-card {
+        background:#111; border:1px solid #1e1e1e; border-radius:10px;
+        padding:1.5rem 1.75rem; transition:border-color 0.2s;
+    }
+    .path-icon { font-size:1.5rem; margin-bottom:0.5rem; }
+    .path-title { font-size:0.95rem; font-weight:800; color:#fff; margin-bottom:0.35rem; }
+    .path-desc { font-size:0.76rem; color:#555; line-height:1.55; margin-bottom:0.85rem; }
+    .path-features { list-style:none; padding:0; margin:0; }
+    .path-features li { font-size:0.72rem; color:#555; padding:0.15rem 0; }
+    .path-features li::before { content:"→ "; color:#ff6b2b; font-weight:700; }
+    </style>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem;">
+        <div class="path-card">
+            <div class="path-icon">🔗</div>
+            <div class="path-title">Backlink Opportunity Analysis</div>
+            <div class="path-desc">Discover the best domains to target for link building, powered by DataForSEO and AI.</div>
+            <ul class="path-features">
+                <li>Top 10 influential domains by industry and market</li>
+                <li>Free, paid, publisher and blog opportunities</li>
+                <li>Competitive intelligence and link gap analysis</li>
+                <li>Contact pathway per domain</li>
+                <li>CSV export per category</li>
+            </ul>
+        </div>
+        <div class="path-card">
+            <div class="path-icon">✍️</div>
+            <div class="path-title">Content Creation</div>
+            <div class="path-desc">Generate guest post and outreach content tailored to your brand, keywords and target publisher.</div>
+            <ul class="path-features">
+                <li>Topic, tone and keyword brief</li>
+                <li>AI-generated full article</li>
+                <li>Brand terms and AI prompt targeting</li>
+                <li>Human review before outreach</li>
+                <li>Download as .txt</li>
+            </ul>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_a, col_c = st.columns(2)
+    with col_a:
+        go_analysis = st.button("▶  Backlink Analysis", use_container_width=True, key="go_analysis")
+    with col_c:
+        go_content = st.button("✍  Content Creation", use_container_width=True, key="go_content")
+
+    # Content path — no analysis needed
+    if go_content:
+        if not client_name or not client_url:
+            st.error("Client name and URL are required before continuing.")
+        else:
+            st.session_state.client = {
+                "name": client_name, "url": client_url,
+                "industry": industry, "market": market, "language": language,
+            }
+            st.session_state.page = "content"
+            st.rerun()
+
+    # Analysis path — reveal competitor inputs
+    if go_analysis:
+        if not client_name or not client_url:
+            st.error("Client name and URL are required.")
+        else:
+            st.session_state.client = {
+                "name": client_name, "url": client_url,
+                "industry": industry, "market": market, "language": language,
+            }
+            st.session_state.show_competitors = True
+
+    if st.session_state.get("show_competitors"):
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_header("3", "Competitors")
+        st.markdown('<div class="exd-alert">Enter up to 3 competitor URLs — or leave blank and AI will suggest them.</div>', unsafe_allow_html=True)
+
+        c1, c2, c3 = st.columns(3)
+        with c1: comp1 = st.text_input("Competitor 1", placeholder="emaar.com")
+        with c2: comp2 = st.text_input("Competitor 2", placeholder="damac.com")
+        with c3: comp3 = st.text_input("Competitor 3", placeholder="nakheel.com")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        run = st.button("▶  Run Analysis Now", use_container_width=True, key="run_analysis")
+    else:
+        comp1 = comp2 = comp3 = ""
+        run = False
 
     if run:
         if not client_name or not client_url:
