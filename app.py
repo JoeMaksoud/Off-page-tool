@@ -640,85 +640,109 @@ if st.session_state.stage == "input":
             }
 
             competitors = [c for c in [comp1, comp2, comp3] if c.strip()]
+            errors_log  = []
 
-            with st.spinner("Running analysis…"):
+            # ── Step 1: Competitor suggestion ──
+            if not competitors:
+                with st.spinner("AI suggesting competitors…"):
+                    try:
+                        competitors = ai_suggest_competitors(
+                            client_name, client_url, industry, market, language
+                        )
+                        st.success(f"✓ AI suggested: {', '.join(competitors)}")
+                    except Exception as e:
+                        err = f"Gemini competitor suggestion failed: {str(e)}"
+                        errors_log.append(err)
+                        st.error(f"⚠ {err}")
+                        st.warning("Please enter competitor URLs manually above and try again.")
 
-                # Auto-suggest competitors if not provided
-                if not competitors:
-                    with st.spinner("AI suggesting competitors…"):
-                        try:
-                            competitors = ai_suggest_competitors(
-                                client_name, client_url, industry, market, language
-                            )
-                            st.info(f"AI suggested competitors: {', '.join(competitors)}")
-                        except Exception as e:
-                            st.error(f"Competitor suggestion failed: {e}")
-                            competitors = []
+            if not competitors:
+                st.stop()
 
-                st.session_state.competitors = competitors
+            st.session_state.competitors = competitors
 
-                if not competitors:
-                    st.error("No competitors available. Please enter at least one manually.")
-                    st.stop()
-
-                # DataForSEO calls
-                all_domains_for_summary = [client_url] + competitors
+            # ── Step 2: DataForSEO — Backlink Summary ──
+            with st.spinner("Fetching backlink summaries…"):
                 try:
-                    with st.spinner("Fetching backlink summaries…"):
-                        summaries = fetch_backlink_summary(all_domains_for_summary)
-                        st.session_state.summaries = summaries
+                    summaries = fetch_backlink_summary([client_url] + competitors)
+                    st.session_state.summaries = summaries
+                    st.success(f"✓ Backlink summaries fetched for {len(summaries)} domains")
                 except Exception as e:
-                    st.warning(f"Summary fetch issue: {e} — continuing without summaries.")
+                    err = f"Backlink summary failed: {str(e)}"
+                    errors_log.append(err)
+                    st.warning(f"⚠ {err}")
+                    st.session_state.summaries = {}
 
-                raw = []
+            raw = []
+
+            # ── Step 3: DataForSEO — Domain Intersection ──
+            with st.spinner("Running link gap analysis (domain intersection)…"):
                 try:
-                    with st.spinner("Running domain intersection (link gap analysis)…"):
-                        intersection = fetch_domain_intersection(competitors, client_url)
-                        raw.extend(intersection)
+                    intersection = fetch_domain_intersection(competitors, client_url)
+                    raw.extend(intersection)
+                    st.success(f"✓ Domain intersection: {len(intersection)} opportunities found")
                 except Exception as e:
-                    st.warning(f"Domain intersection issue: {e}")
+                    err = f"Domain intersection failed: {str(e)}"
+                    errors_log.append(err)
+                    st.warning(f"⚠ {err}")
 
+            # ── Step 4: DataForSEO — Referring Domains ──
+            with st.spinner("Fetching referring domains from competitors…"):
                 try:
-                    with st.spinner("Fetching referring domains from competitors…"):
-                        for comp in competitors[:2]:  # limit to first 2 for cost
-                            refs = fetch_referring_domains(comp, limit=25)
-                            raw.extend(refs)
+                    for comp in competitors[:2]:
+                        refs = fetch_referring_domains(comp, limit=25)
+                        raw.extend(refs)
+                    st.success(f"✓ Referring domains: {len(raw)} total raw results")
                 except Exception as e:
-                    st.warning(f"Referring domains issue: {e}")
+                    err = f"Referring domains failed: {str(e)}"
+                    errors_log.append(err)
+                    st.warning(f"⚠ {err}")
 
-                # Deduplicate by domain
-                seen   = set()
-                unique = []
-                for d in sorted(raw, key=lambda x: x["rank"], reverse=True):
-                    if d["domain"] and d["domain"] not in seen:
-                        seen.add(d["domain"])
-                        unique.append(d)
+            # ── Deduplicate ──
+            seen, unique = set(), []
+            for d in sorted(raw, key=lambda x: x["rank"], reverse=True):
+                if d["domain"] and d["domain"] not in seen:
+                    seen.add(d["domain"])
+                    unique.append(d)
+            st.session_state.raw_domains = unique[:40]
 
-                st.session_state.raw_domains = unique[:40]
+            # ── Step 5: AI Enrichment ──
+            if unique:
+                with st.spinner("AI categorizing and enriching results…"):
+                    try:
+                        enriched = ai_categorize_and_enrich(
+                            unique[:40], client_name, industry, market
+                        )
+                        st.session_state.enriched = sorted(
+                            enriched, key=lambda x: x.get("relevance_score", 0), reverse=True
+                        )
+                        st.success(f"✓ AI enriched {len(enriched)} domains")
+                    except Exception as e:
+                        err = f"AI enrichment failed: {str(e)}"
+                        errors_log.append(err)
+                        st.error(f"⚠ {err}")
+                        st.session_state.enriched = unique[:40]
+            else:
+                st.session_state.enriched = []
+                if errors_log:
+                    st.error("No domain data returned. Check the errors above — DataForSEO Backlinks API may not be active on your account yet.")
+                else:
+                    st.warning("No domains found. Try different competitor URLs.")
 
-                # AI enrichment
-                if unique:
-                    with st.spinner("AI categorizing and enriching results…"):
-                        try:
-                            enriched = ai_categorize_and_enrich(
-                                unique[:40],
-                                client_name, industry, market
-                            )
-                            st.session_state.enriched = sorted(
-                                enriched, key=lambda x: x.get("relevance_score", 0), reverse=True
-                            )
-                        except Exception as e:
-                            st.error(f"AI enrichment failed: {e}")
-                            st.session_state.enriched = unique[:40]
+            # ── Init validation state ──
+            for d in st.session_state.enriched:
+                domain = d["domain"]
+                if domain not in st.session_state.validation:
+                    st.session_state.validation[domain] = {"status": "pending", "notes": ""}
 
-                # Init validation state
-                for d in st.session_state.enriched:
-                    domain = d["domain"]
-                    if domain not in st.session_state.validation:
-                        st.session_state.validation[domain] = {"status": "pending", "notes": ""}
+            # ── Show full error log if anything failed ──
+            if errors_log:
+                with st.expander("⚠ Error details (share with developer if issue persists)"):
+                    for e in errors_log:
+                        st.code(e)
 
-                st.session_state.stage = "results"
-                st.rerun()
+            st.session_state.stage = "results"
+            st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STAGE 2 — RESULTS & VALIDATION
