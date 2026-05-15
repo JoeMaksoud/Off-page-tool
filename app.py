@@ -818,11 +818,18 @@ elif st.session_state.page == "content":
 
     section_header("1", "Content Brief")
 
-    top_domains    = [d["domain"] for d in enriched if d.get("is_top_influential")][:10]
-    all_domains    = [d["domain"] for d in enriched][:20]
-    target_options = ["— No specific target —"] + (top_domains if top_domains else all_domains)
-    target_domain  = st.selectbox("Target Domain", target_options,
-                                   help="Select a domain from the intelligence dashboard to tailor the content for that publisher.")
+    # Target domain — use top influential from analysis if available, else fall back to client URL
+    top_domains   = [d["domain"] for d in enriched if d.get("is_top_influential")][:10]
+    all_domains   = [d["domain"] for d in enriched][:20]
+    default_domain = top_domains[0] if top_domains else (all_domains[0] if all_domains else clean_domain(client.get("url","")))
+
+    if top_domains or all_domains:
+        target_options = top_domains if top_domains else all_domains
+        target_domain  = st.selectbox("Target Domain", target_options,
+                                       help="Domains from your backlink analysis — select the one you're writing for.")
+    else:
+        target_domain = clean_domain(client.get("url", ""))
+        st.markdown(f'<div style="background:#141414;border:1px solid #242424;border-radius:6px;padding:0.6rem 0.9rem;font-size:0.82rem;color:#888;margin-bottom:0.75rem;">Target Domain &nbsp;<span style="color:#fff;font-weight:600">{target_domain}</span> &nbsp;<span style="color:#444;font-size:0.7rem">(run a backlink analysis to unlock domain-specific targeting)</span></div>', unsafe_allow_html=True)
 
     c1, c2 = st.columns(2)
     with c1:
