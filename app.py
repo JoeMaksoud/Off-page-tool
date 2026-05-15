@@ -394,16 +394,8 @@ st.markdown("""
 # ── Top navigation (shown on all pages except input) ─────────────────────────
 
 if st.session_state.page != "input":
-    c1, c2, c3 = st.columns([1, 1, 3])
-    with c1:
-        if st.button("① Intelligence Dashboard", key="nav_dash"):
-            st.session_state.page = "dashboard"
-            st.rerun()
-    with c2:
-        if st.button("② Content Generation", key="nav_content"):
-            st.session_state.page = "content"
-            st.rerun()
-    with c3:
+    _, _, col_new = st.columns([3, 3, 1])
+    with col_new:
         if st.button("← New Analysis", key="nav_new"):
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
@@ -627,6 +619,11 @@ elif st.session_state.page == "dashboard":
     competitors = st.session_state.competitors
     raw_domains = st.session_state.raw_domains
 
+    if st.button("✍  Go to Content Generation →", key="dash_to_content"):
+        st.session_state.page = "content"
+        st.rerun()
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # ── Domain card renderer ──────────────────────────────────────────────────
 
     def domain_card(d, key_prefix):
@@ -725,44 +722,90 @@ elif st.session_state.page == "dashboard":
 
     section_header("2", "Link Building Opportunities")
 
-    def get_cat(cat, n=10):
-        return [d for d in enriched if d.get("category") == cat][:n]
-
-    top10        = [d for d in enriched if d.get("is_top_influential")][:10]
-    free_list    = get_cat("free")
-    paid_list    = get_cat("paid")
-    pub_list     = get_cat("publisher")
-    blog_list    = get_cat("blog")
-
-    tab_top, tab_free, tab_paid, tab_pub, tab_blog = st.tabs([
-        "⭐ Top 10 Influential",
-        "Free Opportunities",
-        "Paid Placements",
-        "Publishers",
-        "Blogs",
-    ])
-
     cname = client['name'].lower().replace(' ','_')
 
-    with tab_top:
-        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">The 10 most impactful domains for your industry and market — ranked by AI relevance score, regardless of category.</p>', unsafe_allow_html=True)
-        render_list(top10, "top", f"top_influential_{cname}.csv")
+    # If enriched is empty but raw_domains exist, AI enrichment failed —
+    # fall back to raw data with default category so tabs aren't empty
+    display_domains = enriched if enriched else [
+        {**d, "category": "free", "rationale": "Domain identified via DataForSEO — AI categorization pending.", 
+         "contact_hint": "Check website contact page", "relevance_score": 5, "is_top_influential": False}
+        for d in raw_domains
+    ]
 
-    with tab_free:
-        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains accepting guest posts, editorial contributions or community submissions at no cost.</p>', unsafe_allow_html=True)
-        render_list(free_list, "free", f"free_opportunities_{cname}.csv")
+    if not display_domains:
+        st.markdown('<div class="exd-alert">No domain data yet — DataForSEO Backlinks API trial may still be activating. The dashboard will populate once the API is live.</div>', unsafe_allow_html=True)
+    else:
+        def get_cat(cat):
+            return [d for d in display_domains if d.get("category") == cat]
 
-    with tab_paid:
-        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains offering sponsored content, paid placements or native advertising opportunities.</p>', unsafe_allow_html=True)
-        render_list(paid_list, "paid", f"paid_placements_{cname}.csv")
+        top10     = [d for d in display_domains if d.get("is_top_influential")][:10]
+        # If AI didn't mark any as top influential, take top 10 by relevance score
+        if not top10:
+            top10 = sorted(display_domains, key=lambda x: x.get("relevance_score", 0), reverse=True)[:10]
 
-    with tab_pub:
-        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Major media outlets, trade publications and industry press relevant to your space.</p>', unsafe_allow_html=True)
-        render_list(pub_list, "pub", f"publishers_{cname}.csv")
+        free_all  = get_cat("free")
+        paid_all  = get_cat("paid")
+        pub_all   = get_cat("publisher")
+        blog_all  = get_cat("blog")
 
-    with tab_blog:
-        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Independent blogs and niche content sites with engaged audiences in your industry.</p>', unsafe_allow_html=True)
-        render_list(blog_list, "blog", f"blogs_{cname}.csv")
+        # Load-more state keys
+        for key, default in [
+            ("show_free", 10), ("show_paid", 10),
+            ("show_pub", 10),  ("show_blog", 10),
+        ]:
+            if key not in st.session_state:
+                st.session_state[key] = default
+
+        def render_with_loadmore(all_items, prefix, export_name, show_key):
+            if not all_items:
+                st.markdown('<p style="color:#444;font-size:0.82rem;padding:0.75rem 0;">No domains in this category.</p>', unsafe_allow_html=True)
+                return
+            visible = all_items[:st.session_state[show_key]]
+            df = pd.DataFrame([{
+                "Domain": d.get("domain",""), "DR": d.get("rank",0),
+                "Backlinks": d.get("backlinks",0), "Spam": d.get("spam_score",0),
+                "Category": d.get("category",""), "Relevance": d.get("relevance_score",""),
+                "Rationale": d.get("rationale",""), "Contact": d.get("contact_hint",""),
+            } for d in all_items])
+            ec, lc = st.columns([1, 1])
+            with ec:
+                st.download_button(f"⬇ Export all {len(all_items)} as CSV", df.to_csv(index=False).encode(), export_name, "text/csv", key=f"exp_{prefix}")
+            st.markdown("<br>", unsafe_allow_html=True)
+            for i, d in enumerate(visible):
+                domain_card(d, f"{prefix}_{i}")
+            remaining = len(all_items) - len(visible)
+            if remaining > 0:
+                if st.button(f"Load {min(remaining, 10)} more ({remaining} remaining)", key=f"more_{prefix}"):
+                    st.session_state[show_key] += 10
+                    st.rerun()
+
+        tab_top, tab_free, tab_paid, tab_pub, tab_blog = st.tabs([
+            f"⭐ Top 10 Influential",
+            f"Free ({len(free_all)})",
+            f"Paid ({len(paid_all)})",
+            f"Publishers ({len(pub_all)})",
+            f"Blogs ({len(blog_all)})",
+        ])
+
+        with tab_top:
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">The 10 most impactful domains for your industry and market — ranked by AI relevance score.</p>', unsafe_allow_html=True)
+            render_list(top10, "top", f"top_influential_{cname}.csv")
+
+        with tab_free:
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains accepting guest posts, editorial contributions or community submissions at no cost.</p>', unsafe_allow_html=True)
+            render_with_loadmore(free_all, "free", f"free_opportunities_{cname}.csv", "show_free")
+
+        with tab_paid:
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains offering sponsored content, paid placements or native advertising opportunities.</p>', unsafe_allow_html=True)
+            render_with_loadmore(paid_all, "paid", f"paid_placements_{cname}.csv", "show_paid")
+
+        with tab_pub:
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Major media outlets, trade publications and industry press relevant to your space.</p>', unsafe_allow_html=True)
+            render_with_loadmore(pub_all, "pub", f"publishers_{cname}.csv", "show_pub")
+
+        with tab_blog:
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Independent blogs and niche content sites with engaged audiences in your industry.</p>', unsafe_allow_html=True)
+            render_with_loadmore(blog_all, "blog", f"blogs_{cname}.csv", "show_blog")
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -770,51 +813,132 @@ elif st.session_state.page == "dashboard":
 
     section_header("3", "Competitive Intelligence")
 
-    # Build signals
-    missed_domains = [
-        {**d, "is_missed": True}
-        for d in enriched if d.get("source") == "intersection"
-    ][:10]
+    # Load-more state for competitive tabs
+    for key, default in [
+        ("show_cs", 10), ("show_ci", 10), ("show_mo", 10),
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = default
 
-    top_comp_sources = sorted(
-        [d for d in enriched if d.get("source") == "referring"],
+    # Build signals from enriched or raw fallback
+    source_pool = enriched if enriched else [
+        {**d, "category": "free", "rationale": "", "contact_hint": "Check website contact page",
+         "relevance_score": 5, "is_top_influential": False}
+        for d in raw_domains
+    ]
+
+    missed_all = sorted(
+        [{**d, "is_missed": True} for d in source_pool if d.get("source") == "intersection"],
         key=lambda x: x.get("rank", 0), reverse=True
-    )[:10]
-
-    intersection_domains = [d for d in enriched if d.get("source") == "intersection"][:10]
-
-    # Unique: appears only once across competitor referring domains
-    competitor_domain_freq = Counter(
-        d.get("domain") for d in raw_domains if d.get("source") == "referring"
     )
-    unique_domains = [
-        {**d, "is_unique": True}
-        for d in enriched
-        if d.get("source") == "referring" and competitor_domain_freq.get(d.get("domain",""), 0) == 1
-    ][:10]
+
+    top_comp_sources_all = sorted(
+        [d for d in source_pool if d.get("source") == "referring"],
+        key=lambda x: x.get("rank", 0), reverse=True
+    )
+
+    intersection_all = sorted(
+        [d for d in source_pool if d.get("source") == "intersection"],
+        key=lambda x: x.get("rank", 0), reverse=True
+    )
+
+    # Unique per competitor — group raw_domains by competitor
+    competitor_list = list(dict.fromkeys(
+        d.get("competitor","") for d in raw_domains if d.get("source") == "referring" and d.get("competitor")
+    ))
+
+    def render_with_loadmore_ci(all_items, prefix, export_name, show_key):
+        if not all_items:
+            st.markdown('<p style="color:#444;font-size:0.82rem;padding:0.75rem 0;">No domains found.</p>', unsafe_allow_html=True)
+            return
+        visible = all_items[:st.session_state[show_key]]
+        df = pd.DataFrame([{
+            "Domain": d.get("domain",""), "DR": d.get("rank",0),
+            "Backlinks": d.get("backlinks",0), "Spam": d.get("spam_score",0),
+            "Rationale": d.get("rationale",""), "Contact": d.get("contact_hint",""),
+        } for d in all_items])
+        st.download_button(f"⬇ Export all {len(all_items)} as CSV", df.to_csv(index=False).encode(), export_name, "text/csv", key=f"exp_{prefix}")
+        st.markdown("<br>", unsafe_allow_html=True)
+        for i, d in enumerate(visible):
+            domain_card(d, f"{prefix}_{i}")
+        remaining = len(all_items) - len(visible)
+        if remaining > 0:
+            if st.button(f"Load {min(remaining, 10)} more ({remaining} remaining)", key=f"more_{prefix}"):
+                st.session_state[show_key] += 10
+                st.rerun()
 
     ci1, ci2, ci3, ci4 = st.tabs([
-        "Top Competitor Sources",
-        "Domain Intersection",
-        "Unique Domains",
-        "Missed Opportunities",
+        f"Top Competitor Sources ({len(top_comp_sources_all)})",
+        f"Domain Intersection ({len(intersection_all)})",
+        "Unique Domains per Competitor",
+        f"Missed Opportunities ({len(missed_all)})",
     ])
 
     with ci1:
         st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Highest authority domains currently linking to your competitors — where you need to be.</p>', unsafe_allow_html=True)
-        render_list(top_comp_sources, "cs", f"competitor_sources_{cname}.csv")
+        render_with_loadmore_ci(top_comp_sources_all, "cs", f"competitor_sources_{cname}.csv", "show_cs")
 
     with ci2:
         st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains linking to multiple competitors simultaneously — proven industry linkers, highest priority targets.</p>', unsafe_allow_html=True)
-        render_list(intersection_domains, "ci", f"intersection_{cname}.csv")
+        render_with_loadmore_ci(intersection_all, "ci", f"intersection_{cname}.csv", "show_ci")
 
     with ci3:
-        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains linking to only one competitor — less contested, easier to win with targeted outreach.</p>', unsafe_allow_html=True)
-        render_list(unique_domains, "ud", f"unique_domains_{cname}.csv")
+        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Backlink sources unique to each competitor — see where each one is building links the others are not.</p>', unsafe_allow_html=True)
+        if not competitor_list:
+            st.markdown('<p style="color:#444;font-size:0.82rem;padding:0.75rem 0;">No competitor data available.</p>', unsafe_allow_html=True)
+        else:
+            for comp in competitor_list:
+                comp_domains_raw = [d for d in raw_domains if d.get("competitor") == comp and d.get("source") == "referring"]
+                # Enrich with AI data where available, else use raw
+                enriched_map = {d.get("domain"): d for d in source_pool}
+                comp_domains = []
+                for d in sorted(comp_domains_raw, key=lambda x: x.get("rank",0), reverse=True):
+                    enriched_d = enriched_map.get(d["domain"], d)
+                    comp_domains.append({**enriched_d, "is_unique": True})
+
+                show_key = f"show_unique_{comp.replace('.','_')}"
+                if show_key not in st.session_state:
+                    st.session_state[show_key] = 10
+
+                st.markdown(f"""
+                <div style="background:#111;border:1px solid #1e1e1e;border-left:3px solid #ff6b2b;
+                border-radius:8px;padding:0.75rem 1rem;margin:1rem 0 0.75rem;">
+                    <div style="font-size:0.7rem;font-weight:700;letter-spacing:0.1em;
+                    text-transform:uppercase;color:#ff6b2b;margin-bottom:0.15rem;">Competitor</div>
+                    <div style="font-size:0.95rem;font-weight:700;color:#fff;">{comp}</div>
+                    <div style="font-size:0.72rem;color:#555;margin-top:0.2rem;">{len(comp_domains)} unique referring domains</div>
+                </div>""", unsafe_allow_html=True)
+
+                if not comp_domains:
+                    st.markdown('<p style="color:#444;font-size:0.82rem;padding:0.5rem 0 1rem;">No unique domains found for this competitor.</p>', unsafe_allow_html=True)
+                    continue
+
+                visible = comp_domains[:st.session_state[show_key]]
+                for i, d in enumerate(visible):
+                    domain_card(d, f"unique_{comp.replace('.','_')}_{i}")
+
+                remaining = len(comp_domains) - len(visible)
+                if remaining > 0:
+                    if st.button(f"Load {min(remaining,10)} more for {comp} ({remaining} remaining)", key=f"more_unique_{comp.replace('.','_')}"):
+                        st.session_state[show_key] += 10
+                        st.rerun()
+
+                df_comp = pd.DataFrame([{
+                    "Domain": d.get("domain",""), "DR": d.get("rank",0),
+                    "Backlinks": d.get("backlinks",0), "Spam": d.get("spam_score",0),
+                } for d in comp_domains])
+                st.download_button(
+                    f"⬇ Export {comp} domains",
+                    df_comp.to_csv(index=False).encode(),
+                    f"unique_{comp.replace('.','_')}_{cname}.csv",
+                    "text/csv",
+                    key=f"exp_unique_{comp.replace('.','_')}"
+                )
+                st.markdown("<br>", unsafe_allow_html=True)
 
     with ci4:
-        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains your competitors have secured but your client is missing entirely — close these gaps first.</p>', unsafe_allow_html=True)
-        render_list(missed_domains, "mo", f"missed_opportunities_{cname}.csv")
+        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains your competitors have secured but your client is missing — close these gaps first.</p>', unsafe_allow_html=True)
+        render_with_loadmore_ci(missed_all, "mo", f"missed_opportunities_{cname}.csv", "show_mo")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE — CONTENT GENERATION
@@ -824,6 +948,12 @@ elif st.session_state.page == "content":
 
     client   = st.session_state.client
     enriched = st.session_state.enriched
+
+    if st.session_state.get("summaries") or st.session_state.get("enriched"):
+        if st.button("← Back to Intelligence Dashboard", key="content_to_dash"):
+            st.session_state.page = "dashboard"
+            st.rerun()
+        st.markdown("<br>", unsafe_allow_html=True)
 
     section_header("1", "Content Brief")
 
