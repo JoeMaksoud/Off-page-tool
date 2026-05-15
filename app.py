@@ -156,7 +156,7 @@ def get_dfs_headers():
 
 def get_gemini():
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    return genai.GenerativeModel("gemini-2.0-flash")
+    return genai.GenerativeModel("gemini-2.5-flash")
 
 def dfs_post(endpoint, payload):
     r = requests.post(f"https://api.dataforseo.com/v3/{endpoint}",
@@ -328,7 +328,7 @@ relevance_score is an integer 1-10."""
         })
     return sorted(enriched, key=lambda x: x.get("relevance_score", 0), reverse=True)
 
-def ai_generate_content(topic, length, tone, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry):
+def ai_generate_content(topic, length, tone, language, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry):
     model  = get_gemini()
     prompt = f"""You are a senior content strategist writing for {client_name} in {industry}.
 
@@ -336,6 +336,7 @@ Write a guest post / outreach article with these specifications:
 - Topic: {topic}
 - Word count: {length} words
 - Tone: {tone}
+- Language: write the entire article in {language}
 - Brand terms (use naturally): {brand_terms}
 - AI prompts / questions to target: {target_prompts}
 - Primary keyword: {primary_kw}
@@ -830,6 +831,7 @@ elif st.session_state.page == "content":
             "Authoritative & Expert","Conversational & Friendly",
             "Thought Leadership","Educational & Informative","Journalistic","Persuasive"
         ])
+        content_lang = st.selectbox("Content Language", ["English", "Arabic", "French"])
         primary_kw  = st.text_input("Primary Keyword", placeholder="e.g. luxury real estate Dubai")
         brand_terms = st.text_input("Brand Terms", placeholder="e.g. Sobha Realty, Sobha Hartland")
     with c2:
@@ -848,7 +850,7 @@ elif st.session_state.page == "content":
             with st.spinner("Generating content…"):
                 try:
                     content = ai_generate_content(
-                        topic, length, tone, brand_terms,
+                        topic, length, tone, content_lang, brand_terms,
                         target_prompts, primary_kw, secondary_kws,
                         client.get("name",""), client.get("industry","")
                     )
