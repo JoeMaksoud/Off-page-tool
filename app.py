@@ -328,7 +328,7 @@ relevance_score is an integer 1-10."""
         })
     return sorted(enriched, key=lambda x: x.get("relevance_score", 0), reverse=True)
 
-def ai_generate_content(topic, length, tone, language, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry):
+def ai_generate_content(topic, length, tone, language, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry, client_url):
     model  = get_gemini()
     prompt = f"""You are a senior content strategist writing for {client_name} in {industry}.
 
@@ -341,14 +341,23 @@ Write a guest post / outreach article with these specifications:
 - AI prompts / questions to target: {target_prompts}
 - Primary keyword: {primary_kw}
 - Secondary keywords: {secondary_kws}
+- Client website: {client_url}
 
-Requirements:
-- Full structured article with H2/H3 headings (use markdown)
-- Primary keyword in title, first paragraph, and at least 2 subheadings
+Formatting requirements:
+- Use markdown: ## for H2, ### for H3
+- Make ALL H2 and H3 headings bold using **heading text**
+- Bold every instance of the primary keyword and secondary keywords throughout the article using **keyword**
+- Primary keyword must appear in the title, first paragraph, and at least 2 subheadings
 - Secondary keywords woven naturally throughout
 - Brand terms authentic, not forced
 - Non-salesy conclusion
 - Do NOT include byline, author bio, or meta description
+
+Internal linking:
+- At the end of the article, add a section titled "## **Internal Link Suggestions**"
+- Suggest 3 internal links the editor should add when publishing on {client_url}
+- Format each as: [Anchor text suggestion] → Page type: (e.g. project page, blog post, contact page, about page) — Reason: (one sentence why this link adds value here)
+- These are editorial suggestions — the publisher will map real URLs
 
 Write the full article now."""
     r = model.generate_content(prompt, generation_config={"max_output_tokens": 4096})
@@ -859,7 +868,8 @@ elif st.session_state.page == "content":
                     content = ai_generate_content(
                         topic, length, tone, content_lang, brand_terms,
                         target_prompts, primary_kw, secondary_kws,
-                        client.get("name",""), client.get("industry","")
+                        client.get("name",""), client.get("industry",""),
+                        client.get("url","")
                     )
                     st.session_state.generated_content = content
                 except Exception as e:
@@ -877,9 +887,128 @@ elif st.session_state.page == "content":
             label_visibility="collapsed"
         )
 
-        c1, c2 = st.columns(2)
+        # ── Word document export ──────────────────────────────────────────────
+        def build_docx(markdown_text, title, client_name):
+            from docx import Document as DocxDocument
+            from docx.shared import Pt, RGBColor, Inches
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            import re, io
+
+            doc = DocxDocument()
+
+            # Page margins
+            for section in doc.sections:
+                section.top_margin    = Inches(1)
+                section.bottom_margin = Inches(1)
+                section.left_margin   = Inches(1.2)
+                section.right_margin  = Inches(1.2)
+
+            # Styles
+            style = doc.styles["Normal"]
+            style.font.name = "Arial"
+            style.font.size = Pt(11)
+
+            # Title
+            title_para = doc.add_paragraph()
+            title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = title_para.add_run(title or client_name)
+            run.bold = True
+            run.font.size = Pt(20)
+            run.font.color.rgb = RGBColor(0xFF, 0x6B, 0x2B)
+            doc.add_paragraph()
+
+            def add_styled_run(para, text, bold=False, is_heading=False):
+                run = para.add_run(text)
+                run.bold = bold or is_heading
+                if is_heading:
+                    run.font.size = Pt(13) if para.style.name.startswith("Heading 2") else Pt(12)
+                return run
+
+            def parse_inline(para, text, force_bold=False):
+                """Parse **bold** markers and add runs accordingly."""
+                pattern = re.compile(r"\*\*(.+?)\*\*")
+                last = 0
+                for m in pattern.finditer(text):
+                    before = text[last:m.start()]
+                    if before:
+                        r = para.add_run(before)
+                        r.bold = force_bold
+                    bold_run = para.add_run(m.group(1))
+                    bold_run.bold = True
+                    last = m.end()
+                remainder = text[last:]
+                if remainder:
+                    r = para.add_run(remainder)
+                    r.bold = force_bold
+
+            lines = markdown_text.split("\n")
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    doc.add_paragraph()
+                    continue
+
+                if stripped.startswith("### "):
+                    heading_text = stripped[4:].replace("**","")
+                    p = doc.add_heading(level=3)
+                    r = p.add_run(heading_text)
+                    r.bold = True
+                    r.font.size = Pt(12)
+                elif stripped.startswith("## "):
+                    heading_text = stripped[3:].replace("**","")
+                    p = doc.add_heading(level=2)
+                    r = p.add_run(heading_text)
+                    r.bold = True
+                    r.font.size = Pt(13)
+                elif stripped.startswith("# "):
+                    heading_text = stripped[2:].replace("**","")
+                    p = doc.add_heading(level=1)
+                    r = p.add_run(heading_text)
+                    r.bold = True
+                    r.font.size = Pt(16)
+                elif stripped.startswith("- ") or stripped.startswith("* "):
+                    p = doc.add_paragraph(style="List Bullet")
+                    parse_inline(p, stripped[2:])
+                elif re.match(r"^\d+\. ", stripped):
+                    p = doc.add_paragraph(style="List Number")
+                    parse_inline(p, re.sub(r"^\d+\. ", "", stripped))
+                elif stripped.startswith("[") and "→" in stripped:
+                    # Internal link suggestion line
+                    p = doc.add_paragraph()
+                    p.paragraph_format.left_indent = Inches(0.3)
+                    parse_inline(p, stripped)
+                else:
+                    p = doc.add_paragraph()
+                    parse_inline(p, stripped)
+
+                # Body text spacing
+                if hasattr(p, "paragraph_format"):
+                    p.paragraph_format.space_after = Pt(6)
+
+            buf = io.BytesIO()
+            doc.save(buf)
+            buf.seek(0)
+            return buf.getvalue()
+
+        c1, c2, c3 = st.columns([2, 2, 1])
         with c1:
-            fname = f"content_{primary_kw.lower().replace(' ','_') if 'primary_kw' in dir() else 'article'}_{datetime.now().strftime('%Y%m%d')}.txt"
-            st.download_button("⬇ Download .txt", edited.encode(), fname, "text/plain", use_container_width=True)
+            try:
+                article_title = edited.split("\n")[0].replace("#","").replace("*","").strip()
+                docx_bytes = build_docx(edited, article_title, client.get("name","Article"))
+                fname_docx = f"content_{client.get('name','article').lower().replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.docx"
+                st.download_button(
+                    "⬇ Download Word (.docx)",
+                    data=docx_bytes,
+                    file_name=fname_docx,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+            except Exception as e:
+                fname_txt = f"content_{datetime.now().strftime('%Y%m%d')}.txt"
+                st.download_button("⬇ Download .txt", edited.encode(), fname_txt, "text/plain", use_container_width=True)
+                st.caption(f"Word export unavailable: {e}")
         with c2:
+            fname_txt = f"content_{datetime.now().strftime('%Y%m%d')}.txt"
+            st.download_button("⬇ Download .txt", edited.encode(), fname_txt, "text/plain", use_container_width=True)
+        with c3:
             st.markdown(f'<div style="text-align:center;color:#444;font-size:0.77rem;padding:0.65rem;">{len(edited.split()):,} words</div>', unsafe_allow_html=True)
