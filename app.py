@@ -826,21 +826,21 @@ elif st.session_state.page == "dashboard":
                 '</div>'
 
                 # Backlinks
-                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
                 '<div style="font-size:1.8rem;font-weight:800;color:#fff;line-height:1;">' + bl + '</div>'
-                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.4rem;">Backlinks</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#aaa;margin-top:0.4rem;">Backlinks</div>'
                 '</div>'
 
                 # Referring domains
-                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
                 '<div style="font-size:1.8rem;font-weight:800;color:#fff;line-height:1;">' + rd + '</div>'
-                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.4rem;">Ref. Domains</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#aaa;margin-top:0.4rem;">Ref. Domains</div>'
                 '</div>'
 
                 # Spam score
-                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
                 '<div style="font-size:1.8rem;font-weight:800;color:' + sp_color + ';line-height:1;">' + sp + '</div>'
-                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.4rem;">Spam Score</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#aaa;margin-top:0.4rem;">Spam Score</div>'
                 '<div style="font-size:0.62rem;color:' + sp_color + ';margin-top:0.2rem;">' + sp_label + '</div>'
                 '</div>'
 
@@ -889,20 +889,25 @@ elif st.session_state.page == "dashboard":
         if key not in st.session_state:
             st.session_state[key] = 10
 
-    # AI opportunities cache — run once per session per tab
+    # AI opportunities — pre-load ALL tabs at page load so section 3 renders immediately
     if "ai_opps_cache" not in st.session_state:
         st.session_state.ai_opps_cache = {}
 
-    def get_ai_opps(tab_type):
-        if tab_type not in st.session_state.ai_opps_cache:
-            try:
-                with st.spinner(f"AI researching {tab_type} opportunities…"):
+    all_tab_types = ["top", "publishers", "guest_posting", "backlink_providers"]
+    missing_tabs  = [t for t in all_tab_types if t not in st.session_state.ai_opps_cache]
+
+    if missing_tabs:
+        with st.spinner(f"AI researching link building opportunities ({len(missing_tabs)} categories)…"):
+            for tab_type in missing_tabs:
+                try:
                     data = ai_opportunities(industry, market, competitors, tab_type)
                     st.session_state.ai_opps_cache[tab_type] = data
-            except Exception as e:
-                st.warning(f"AI research failed: {e}")
-                st.session_state.ai_opps_cache[tab_type] = []
-        return st.session_state.ai_opps_cache[tab_type]
+                except Exception as e:
+                    st.warning(f"AI research failed for {tab_type}: {e}")
+                    st.session_state.ai_opps_cache[tab_type] = []
+
+    def get_ai_opps(tab_type):
+        return st.session_state.ai_opps_cache.get(tab_type, [])
 
     def ai_domain_card(d, key_prefix):
         """Card for pure AI-generated opportunities (no DataForSEO metrics)."""
