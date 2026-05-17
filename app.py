@@ -302,11 +302,14 @@ For each domain return exactly this structure:
   "is_top_influential": false
 }}
 
-Category rules:
-- free: guest posts, editorial submissions, community contributions at no cost
+Category rules — pick the BEST fit:
+- free: accepts guest posts, write-for-us, editorial submissions at no cost
 - paid: sponsored content, paid placements, native ads, advertorial
-- publisher: major media, news outlets, trade publications, industry press
+- publisher: major media, news outlets, trade publications, industry press  
 - blog: independent blogs, niche content sites, influencer blogs
+- link_domain: pure link-building domains — private blog networks, link farms, paid backlink marketplaces, directories primarily used for DA/DR boosting (e.g. sites like fatjoe.com suppliers, linkbuilder.io domains)
+
+IMPORTANT: Most domains will be free, publisher, or blog. Use link_domain only for sites whose PRIMARY purpose is selling/providing backlinks for SEO rather than publishing genuine content.
 
 Set is_top_influential=true for the 10 most impactful domains for {industry} in {market}.
 relevance_score is an integer 1-10."""
@@ -685,34 +688,81 @@ elif st.session_state.page == "dashboard":
 
     section_header("1", "Backlink Profile — Client vs Competitors")
 
+    def dr_rating(rank):
+        if rank >= 80: return ("Excellent", "#22c55e")
+        if rank >= 60: return ("Strong", "#86efac")
+        if rank >= 40: return ("Good", "#ff6b2b")
+        if rank >= 20: return ("Moderate", "#eab308")
+        return ("Weak", "#ef4444")
+
+    def spam_rating(score):
+        if score <= 10: return ("Clean", "#22c55e")
+        if score <= 30: return ("Low", "#86efac")
+        if score <= 60: return ("Moderate", "#eab308")
+        return ("High", "#ef4444")
+
     if summaries:
         client_domain = clean_domain(client["url"])
-        cols          = st.columns(len(summaries))
-        for i, (domain, m) in enumerate(summaries.items()):
+        for domain, m in summaries.items():
             is_client = (domain == client_domain)
-            with cols[i]:
-                st.markdown(f"""
-                <div class="stat-card {'client' if is_client else 'competitor'}">
-                    <div class="stat-label">{'✦ Client' if is_client else 'Competitor'}</div>
-                    <div class="stat-domain" title="{domain}">{''+client['name'] if is_client else domain}</div>
-                    <div class="stat-metric">
-                        <span class="stat-metric-label">Domain Rating</span>
-                        <span class="stat-metric-value {'hi' if is_client else ''}">{m['rank']}</span>
+            label     = client["name"] if is_client else domain
+            card_type = "client" if is_client else "competitor"
+            dr_val    = m["rank"]
+            dr_pct    = min(dr_val, 100)
+            dr_remain = 100 - dr_pct
+            dr_label, dr_color = dr_rating(dr_val)
+            sp_label, sp_color = spam_rating(m["spam_score"])
+
+            # SVG donut for DR (out of 100 scale)
+            r, cx, cy = 38, 50, 50
+            circumference = 2 * 3.14159 * r
+            fill_len = (dr_pct / 100) * circumference
+            gap_len  = circumference - fill_len
+
+            st.markdown(f"""
+            <div style="background:#111;border:1px solid {'#ff6b2b' if is_client else '#222'};
+            border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1rem;">
+                <div style="font-size:0.65rem;font-weight:700;letter-spacing:0.12em;
+                text-transform:uppercase;color:{'#ff6b2b' if is_client else '#444'};margin-bottom:0.3rem;">
+                    {'✦ Client' if is_client else 'Competitor'}</div>
+                <div style="font-size:1rem;font-weight:800;color:#fff;margin-bottom:1rem;">{label}</div>
+
+                <div style="display:flex;align-items:center;gap:2rem;flex-wrap:wrap;">
+
+                    <!-- DR Donut -->
+                    <div style="flex-shrink:0;text-align:center;">
+                        <svg width="110" height="110" viewBox="0 0 100 100">
+                            <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="#1e1e1e" stroke-width="14"/>
+                            <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{dr_color}" stroke-width="14"
+                                stroke-dasharray="{fill_len:.1f} {gap_len:.1f}"
+                                stroke-linecap="round"
+                                transform="rotate(-90 {cx} {cy})"/>
+                            <text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central"
+                                font-size="18" font-weight="800" fill="#fff" font-family="Inter,sans-serif">{dr_val}</text>
+                        </svg>
+                        <div style="font-size:0.65rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#555;margin-top:-0.25rem;">Domain Rating</div>
+                        <div style="font-size:0.7rem;font-weight:700;color:{dr_color};margin-top:0.15rem;">{dr_label} <span style="color:#444;font-weight:400">/ 100</span></div>
                     </div>
-                    {dr_bar_html(m['rank'])}
-                    <div class="stat-metric">
-                        <span class="stat-metric-label">Total Backlinks</span>
-                        <span class="stat-metric-value">{fmt_num(m['backlinks'])}</span>
+
+                    <!-- Stats grid -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;flex:1;min-width:220px;">
+                        <div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">
+                            <div style="font-size:1.6rem;font-weight:800;color:#fff;line-height:1;">{fmt_num(m["backlinks"])}</div>
+                            <div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Backlinks</div>
+                        </div>
+                        <div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">
+                            <div style="font-size:1.6rem;font-weight:800;color:#fff;line-height:1;">{fmt_num(m["referring_domains"])}</div>
+                            <div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Ref. Domains</div>
+                        </div>
+                        <div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">
+                            <div style="font-size:1.6rem;font-weight:800;color:{sp_color};line-height:1;">{m["spam_score"]}</div>
+                            <div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Spam Score</div>
+                            <div style="font-size:0.6rem;color:{sp_color};margin-top:0.15rem;">{sp_label}</div>
+                        </div>
                     </div>
-                    <div class="stat-metric">
-                        <span class="stat-metric-label">Referring Domains</span>
-                        <span class="stat-metric-value">{fmt_num(m['referring_domains'])}</span>
-                    </div>
-                    <div class="stat-metric">
-                        <span class="stat-metric-label">Spam Score</span>
-                        <span class="stat-metric-value">{m['spam_score']}</span>
-                    </div>
-                </div>""", unsafe_allow_html=True)
+
+                </div>
+            </div>""", unsafe_allow_html=True)
     else:
         st.markdown('<p style="color:#444;font-size:0.83rem;padding:0.5rem 0;">Profile data unavailable — DataForSEO Backlinks API may still be activating.</p>', unsafe_allow_html=True)
 
@@ -739,19 +789,38 @@ elif st.session_state.page == "dashboard":
             return [d for d in display_domains if d.get("category") == cat]
 
         top10     = [d for d in display_domains if d.get("is_top_influential")][:10]
-        # If AI didn't mark any as top influential, take top 10 by relevance score
         if not top10:
             top10 = sorted(display_domains, key=lambda x: x.get("relevance_score", 0), reverse=True)[:10]
 
-        free_all  = get_cat("free")
-        paid_all  = get_cat("paid")
-        pub_all   = get_cat("publisher")
-        blog_all  = get_cat("blog")
+        free_all      = get_cat("free")
+        paid_all      = get_cat("paid")
+        pub_all       = get_cat("publisher")
+        blog_all      = get_cat("blog")
+        linkdomain_all = get_cat("link_domain")
+
+        # If AI categorized nothing into paid/free/pub/blog, distribute by DR
+        # High DR (60+) = publisher, medium (30-60) = free, low = blog, very low = link_domain
+        if not any([free_all, paid_all, pub_all, blog_all, linkdomain_all]):
+            for d in display_domains:
+                dr = d.get("rank", 0)
+                if dr >= 60:
+                    d["category"] = "publisher"
+                elif dr >= 30:
+                    d["category"] = "free"
+                elif dr >= 10:
+                    d["category"] = "blog"
+                else:
+                    d["category"] = "link_domain"
+            free_all       = get_cat("free")
+            paid_all       = get_cat("paid")
+            pub_all        = get_cat("publisher")
+            blog_all       = get_cat("blog")
+            linkdomain_all = get_cat("link_domain")
 
         # Load-more state keys
         for key, default in [
-            ("show_free", 10), ("show_paid", 10),
-            ("show_pub", 10),  ("show_blog", 10),
+            ("show_free", 10), ("show_paid", 10), ("show_pub", 10),
+            ("show_blog", 10), ("show_linkdom", 10),
         ]:
             if key not in st.session_state:
                 st.session_state[key] = default
@@ -767,9 +836,7 @@ elif st.session_state.page == "dashboard":
                 "Category": d.get("category",""), "Relevance": d.get("relevance_score",""),
                 "Rationale": d.get("rationale",""), "Contact": d.get("contact_hint",""),
             } for d in all_items])
-            ec, lc = st.columns([1, 1])
-            with ec:
-                st.download_button(f"⬇ Export all {len(all_items)} as CSV", df.to_csv(index=False).encode(), export_name, "text/csv", key=f"exp_{prefix}")
+            st.download_button(f"⬇ Export all {len(all_items)} as CSV", df.to_csv(index=False).encode(), export_name, "text/csv", key=f"exp_{prefix}")
             st.markdown("<br>", unsafe_allow_html=True)
             for i, d in enumerate(visible):
                 domain_card(d, f"{prefix}_{i}")
@@ -779,12 +846,13 @@ elif st.session_state.page == "dashboard":
                     st.session_state[show_key] += 10
                     st.rerun()
 
-        tab_top, tab_free, tab_paid, tab_pub, tab_blog = st.tabs([
-            f"⭐ Top 10 Influential",
-            f"Free ({len(free_all)})",
-            f"Paid ({len(paid_all)})",
+        tab_top, tab_free, tab_paid, tab_pub, tab_blog, tab_linkdom = st.tabs([
+            "⭐ Top 10",
+            f"Free Guest Posts ({len(free_all)})",
+            f"Paid Placements ({len(paid_all)})",
             f"Publishers ({len(pub_all)})",
             f"Blogs ({len(blog_all)})",
+            f"Paid Link Domains ({len(linkdomain_all)})",
         ])
 
         with tab_top:
@@ -796,16 +864,20 @@ elif st.session_state.page == "dashboard":
             render_with_loadmore(free_all, "free", f"free_opportunities_{cname}.csv", "show_free")
 
         with tab_paid:
-            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains offering sponsored content, paid placements or native advertising opportunities.</p>', unsafe_allow_html=True)
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains offering sponsored content, paid placements or native advertising.</p>', unsafe_allow_html=True)
             render_with_loadmore(paid_all, "paid", f"paid_placements_{cname}.csv", "show_paid")
 
         with tab_pub:
-            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Major media outlets, trade publications and industry press relevant to your space.</p>', unsafe_allow_html=True)
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Major media outlets, trade publications and industry press.</p>', unsafe_allow_html=True)
             render_with_loadmore(pub_all, "pub", f"publishers_{cname}.csv", "show_pub")
 
         with tab_blog:
             st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Independent blogs and niche content sites with engaged audiences in your industry.</p>', unsafe_allow_html=True)
             render_with_loadmore(blog_all, "blog", f"blogs_{cname}.csv", "show_blog")
+
+        with tab_linkdom:
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains primarily used for link-building and authority transfer — directories, paid backlink marketplaces, and guest post networks. Use selectively and verify quality before outreach.</p>', unsafe_allow_html=True)
+            render_with_loadmore(linkdomain_all, "linkdom", f"paid_link_domains_{cname}.csv", "show_linkdom")
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -883,7 +955,7 @@ elif st.session_state.page == "dashboard":
         render_with_loadmore_ci(intersection_all, "ci", f"intersection_{cname}.csv", "show_ci")
 
     with ci3:
-        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Backlink sources unique to each competitor — see where each one is building links the others are not.</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">High-influence domains linking to each competitor but NOT to your client — split by competitor so you know exactly whose link sources to target first.</p>', unsafe_allow_html=True)
         if not competitor_list:
             st.markdown('<p style="color:#444;font-size:0.82rem;padding:0.75rem 0;">No competitor data available.</p>', unsafe_allow_html=True)
         else:
