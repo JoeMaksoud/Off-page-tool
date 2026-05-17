@@ -383,9 +383,34 @@ Return ONLY a valid JSON array, no markdown, no explanation:
 dr_estimate: your best estimate of the domain's authority (1-100).
 relevance_score: integer 1-10 for how valuable this is for {industry} in {market}."""
 
-    r    = model.generate_content(prompt, generation_config={"max_output_tokens": 4096})
-    raw  = r.text.strip().replace("```json","").replace("```","").strip()
-    data = json.loads(raw)
+    r   = model.generate_content(prompt, generation_config={"max_output_tokens": 8192})
+    raw = r.text.strip().replace("```json","").replace("```","").strip()
+
+    # Robust JSON extraction — find the array even if there's surrounding text
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # Try to extract just the JSON array
+        start = raw.find("[")
+        end   = raw.rfind("]")
+        if start != -1 and end != -1:
+            try:
+                data = json.loads(raw[start:end+1])
+            except json.JSONDecodeError:
+                # Last resort: truncate at last complete object
+                truncated = raw[start:]
+                last_brace = truncated.rfind("},")
+                if last_brace != -1:
+                    truncated = truncated[:last_brace+1] + "]"
+                    try:
+                        data = json.loads(truncated)
+                    except:
+                        data = []
+                else:
+                    data = []
+        else:
+            data = []
+
     return sorted(data, key=lambda x: x.get("relevance_score", 0), reverse=True)
 
 def ai_generate_content(topic, length, tone, language, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry, client_url):
@@ -746,6 +771,8 @@ elif st.session_state.page == "dashboard":
     section_header("1", "Backlink Profile — Client vs Competitors")
 
     def dr_rating(rank):
+        # DataForSEO rank is not capped at 100 — treat > 100 as top tier
+        if rank > 100: return ("Top Authority", "#22c55e")
         if rank >= 80: return ("Excellent", "#22c55e")
         if rank >= 60: return ("Strong", "#86efac")
         if rank >= 40: return ("Good", "#ff6b2b")
@@ -771,54 +798,52 @@ elif st.session_state.page == "dashboard":
             role_color   = "#ff6b2b" if is_client else "#444"
             role_text    = "✦ Client" if is_client else "Competitor"
 
-            # Pre-compute SVG values
-            r_svg = 38
-            circ  = 2 * 3.14159 * r_svg
-            fill  = round((dr_pct / 100) * circ, 1)
-            gap   = round(circ - fill, 1)
+            bl = fmt_num(m["backlinks"])
+            rd = fmt_num(m["referring_domains"])
+            sp = str(m["spam_score"])
 
-            bl  = fmt_num(m["backlinks"])
-            rd  = fmt_num(m["referring_domains"])
-            sp  = str(m["spam_score"])
+            # DR bar — capped at 100 for visual, real value shown as number
+            # DataForSEO rank can exceed 100 — it is their proprietary authority score, not a 0-100 scale
+            bar_pct = min(int((min(dr_val, 100) / 100) * 100), 100)
 
             html = (
                 '<div style="background:#111;border:1px solid ' + card_border + ';'
                 'border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1rem;">'
                 '<div style="font-size:0.65rem;font-weight:700;letter-spacing:0.12em;'
                 'text-transform:uppercase;color:' + role_color + ';margin-bottom:0.3rem;">' + role_text + '</div>'
-                '<div style="font-size:1rem;font-weight:800;color:#fff;margin-bottom:1rem;">' + label + '</div>'
-                '<div style="display:flex;align-items:center;gap:2rem;flex-wrap:wrap;">'
+                '<div style="font-size:1rem;font-weight:800;color:#fff;margin-bottom:1.25rem;">' + label + '</div>'
+                '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:1rem;align-items:start;">'
 
-                # Donut
-                '<div style="flex-shrink:0;text-align:center;">'
-                '<svg width="110" height="110" viewBox="0 0 100 100">'
-                '<circle cx="50" cy="50" r="38" fill="none" stroke="#1e1e1e" stroke-width="14"/>'
-                '<circle cx="50" cy="50" r="38" fill="none" stroke="' + dr_color + '" stroke-width="14"'
-                ' stroke-dasharray="' + str(fill) + ' ' + str(gap) + '"'
-                ' stroke-linecap="round" transform="rotate(-90 50 50)"/>'
-                '<text x="50" y="50" text-anchor="middle" dominant-baseline="central"'
-                ' font-size="18" font-weight="800" fill="#fff" font-family="Inter,sans-serif">' + str(dr_val) + '</text>'
-                '</svg>'
-                '<div style="font-size:0.65rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#555;margin-top:-0.25rem;">Domain Rating</div>'
-                '<div style="font-size:0.7rem;font-weight:700;color:' + dr_color + ';margin-top:0.15rem;">' + dr_label + ' <span style="color:#444;font-weight:400">/ 100</span></div>'
+                # DR column
+                '<div style="background:#0d0d0d;border-radius:8px;padding:1rem;border:1px solid #1a1a1a;">'
+                '<div style="font-size:0.62rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#444;margin-bottom:0.4rem;">DataForSEO Rank</div>'
+                '<div style="font-size:2rem;font-weight:800;color:' + dr_color + ';line-height:1;margin-bottom:0.5rem;">' + str(dr_val) + '</div>'
+                '<div style="background:#1a1a1a;border-radius:3px;height:5px;margin-bottom:0.4rem;">'
+                '<div style="height:5px;border-radius:3px;background:' + dr_color + ';width:' + str(bar_pct) + '%;"></div>'
+                '</div>'
+                '<div style="font-size:0.68rem;font-weight:700;color:' + dr_color + ';">' + dr_label + '</div>'
+                '<div style="font-size:0.6rem;color:#444;margin-top:0.2rem;">Proprietary authority score — higher is stronger. Not capped at 100.</div>'
                 '</div>'
 
-                # Stats grid
-                '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;flex:1;min-width:220px;">'
-                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">'
-                '<div style="font-size:1.6rem;font-weight:800;color:#fff;line-height:1;">' + bl + '</div>'
-                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Backlinks</div>'
+                # Backlinks
+                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="font-size:1.8rem;font-weight:800;color:#fff;line-height:1;">' + bl + '</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.4rem;">Backlinks</div>'
                 '</div>'
-                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">'
-                '<div style="font-size:1.6rem;font-weight:800;color:#fff;line-height:1;">' + rd + '</div>'
-                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Ref. Domains</div>'
+
+                # Referring domains
+                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="font-size:1.8rem;font-weight:800;color:#fff;line-height:1;">' + rd + '</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.4rem;">Ref. Domains</div>'
                 '</div>'
-                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">'
-                '<div style="font-size:1.6rem;font-weight:800;color:' + sp_color + ';line-height:1;">' + sp + '</div>'
-                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Spam Score</div>'
-                '<div style="font-size:0.6rem;color:' + sp_color + ';margin-top:0.15rem;">' + sp_label + '</div>'
+
+                # Spam score
+                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:1rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="font-size:1.8rem;font-weight:800;color:' + sp_color + ';line-height:1;">' + sp + '</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.4rem;">Spam Score</div>'
+                '<div style="font-size:0.62rem;color:' + sp_color + ';margin-top:0.2rem;">' + sp_label + '</div>'
                 '</div>'
-                '</div>'
+
                 '</div>'
                 '</div>'
             )
