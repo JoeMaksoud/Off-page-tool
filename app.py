@@ -331,6 +331,63 @@ relevance_score is an integer 1-10."""
         })
     return sorted(enriched, key=lambda x: x.get("relevance_score", 0), reverse=True)
 
+def ai_opportunities(industry, market, competitors, tab_type):
+    """Pure AI-generated opportunities split into industry-specific and generic."""
+    model = get_gemini()
+    comp_context = f"Competitors in this space: {', '.join(competitors)}" if competitors else ""
+
+    tab_instructions = {
+        "top": f"""Return the TOP 20 most valuable domains for link building for a brand in {industry} in {market}.
+These should be the highest-impact opportunities considering authority, relevance, and likelihood of acceptance.
+Blend competitor context if provided. Mix industry-specific and well-known cross-industry sites.
+{comp_context}""",
+
+        "publishers": f"""Return the TOP 20 media outlets, news sites, trade publications, and high-authority editorial sites
+relevant to {industry} in {market}. Include both industry-specific outlets AND major generic publishers
+(Forbes, Entrepreneur, Gulf News, Arabian Business, etc.) that accept contributions.
+{comp_context}""",
+
+        "guest_posting": f"""Return the TOP 20 domains that actively accept guest posts and allow contributors to link back to their website.
+Include both {industry}-specific sites AND generic high-authority guest posting platforms (Medium, HubSpot Blog,
+Moz Blog, Search Engine Journal, etc.). Prioritize sites with active write-for-us programs.
+{comp_context}""",
+
+        "backlink_providers": f"""Return 20 well-known backlink service providers and directory/listing sites useful for {industry} in {market}.
+Split into:
+- Services: FatJoe, Adsy, Authority Builders, LinksThatRank, GetMeLinks, uSERP, etc.
+- Directories/Forums: relevant industry directories, local listing sites, forum platforms, Yellow Pages equivalents for {market}.
+These are NOT editorial sites — they are platforms specifically used to acquire backlinks."""
+    }
+
+    prompt = f"""You are a senior link-building strategist.
+Industry: {industry} | Market: {market}
+
+{tab_instructions.get(tab_type, tab_instructions["top"])}
+
+For each domain classify whether it is "industry_specific" or "generic".
+- industry_specific: directly relevant to {industry} or {market}
+- generic: valuable for any industry/brand
+
+Return ONLY a valid JSON array, no markdown, no explanation:
+[
+  {{
+    "domain": "example.com",
+    "specificity": "industry_specific",
+    "dr_estimate": 75,
+    "rationale": "One sentence max 18 words why this domain matters for link building here.",
+    "contact_hint": "Practical outreach note e.g. Submit via /write-for-us, Use contact form, Email editor@domain.com",
+    "relevance_score": 8
+  }}
+]
+
+dr_estimate: your best estimate of the domain's authority (1-100).
+relevance_score: integer 1-10 for how valuable this is for {industry} in {market}."""
+
+    r    = model.generate_content(prompt, generation_config={"max_output_tokens": 4096})
+    raw  = r.text.strip().replace("```json","").replace("```","").strip()
+    data = json.loads(raw)
+    return sorted(data, key=lambda x: x.get("relevance_score", 0), reverse=True)
+
 def ai_generate_content(topic, length, tone, language, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry, client_url):
     model  = get_gemini()
     prompt = f"""You are a senior content strategist writing for {client_name} in {industry}.
@@ -704,65 +761,68 @@ elif st.session_state.page == "dashboard":
     if summaries:
         client_domain = clean_domain(client["url"])
         for domain, m in summaries.items():
-            is_client = (domain == client_domain)
-            label     = client["name"] if is_client else domain
-            card_type = "client" if is_client else "competitor"
-            dr_val    = m["rank"]
-            dr_pct    = min(dr_val, 100)
-            dr_remain = 100 - dr_pct
+            is_client  = (domain == client_domain)
+            label      = client["name"] if is_client else domain
+            dr_val     = m["rank"]
+            dr_pct     = min(dr_val, 100)
             dr_label, dr_color = dr_rating(dr_val)
             sp_label, sp_color = spam_rating(m["spam_score"])
+            card_border  = "#ff6b2b" if is_client else "#1e1e1e"
+            role_color   = "#ff6b2b" if is_client else "#444"
+            role_text    = "✦ Client" if is_client else "Competitor"
 
-            # SVG donut for DR (out of 100 scale)
-            r, cx, cy = 38, 50, 50
-            circumference = 2 * 3.14159 * r
-            fill_len = (dr_pct / 100) * circumference
-            gap_len  = circumference - fill_len
+            # Pre-compute SVG values
+            r_svg = 38
+            circ  = 2 * 3.14159 * r_svg
+            fill  = round((dr_pct / 100) * circ, 1)
+            gap   = round(circ - fill, 1)
 
-            st.markdown(f"""
-            <div style="background:#111;border:1px solid {'#ff6b2b' if is_client else '#222'};
-            border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1rem;">
-                <div style="font-size:0.65rem;font-weight:700;letter-spacing:0.12em;
-                text-transform:uppercase;color:{'#ff6b2b' if is_client else '#444'};margin-bottom:0.3rem;">
-                    {'✦ Client' if is_client else 'Competitor'}</div>
-                <div style="font-size:1rem;font-weight:800;color:#fff;margin-bottom:1rem;">{label}</div>
+            bl  = fmt_num(m["backlinks"])
+            rd  = fmt_num(m["referring_domains"])
+            sp  = str(m["spam_score"])
 
-                <div style="display:flex;align-items:center;gap:2rem;flex-wrap:wrap;">
+            html = (
+                '<div style="background:#111;border:1px solid ' + card_border + ';'
+                'border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1rem;">'
+                '<div style="font-size:0.65rem;font-weight:700;letter-spacing:0.12em;'
+                'text-transform:uppercase;color:' + role_color + ';margin-bottom:0.3rem;">' + role_text + '</div>'
+                '<div style="font-size:1rem;font-weight:800;color:#fff;margin-bottom:1rem;">' + label + '</div>'
+                '<div style="display:flex;align-items:center;gap:2rem;flex-wrap:wrap;">'
 
-                    <!-- DR Donut -->
-                    <div style="flex-shrink:0;text-align:center;">
-                        <svg width="110" height="110" viewBox="0 0 100 100">
-                            <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="#1e1e1e" stroke-width="14"/>
-                            <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{dr_color}" stroke-width="14"
-                                stroke-dasharray="{fill_len:.1f} {gap_len:.1f}"
-                                stroke-linecap="round"
-                                transform="rotate(-90 {cx} {cy})"/>
-                            <text x="{cx}" y="{cy}" text-anchor="middle" dominant-baseline="central"
-                                font-size="18" font-weight="800" fill="#fff" font-family="Inter,sans-serif">{dr_val}</text>
-                        </svg>
-                        <div style="font-size:0.65rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#555;margin-top:-0.25rem;">Domain Rating</div>
-                        <div style="font-size:0.7rem;font-weight:700;color:{dr_color};margin-top:0.15rem;">{dr_label} <span style="color:#444;font-weight:400">/ 100</span></div>
-                    </div>
+                # Donut
+                '<div style="flex-shrink:0;text-align:center;">'
+                '<svg width="110" height="110" viewBox="0 0 100 100">'
+                '<circle cx="50" cy="50" r="38" fill="none" stroke="#1e1e1e" stroke-width="14"/>'
+                '<circle cx="50" cy="50" r="38" fill="none" stroke="' + dr_color + '" stroke-width="14"'
+                ' stroke-dasharray="' + str(fill) + ' ' + str(gap) + '"'
+                ' stroke-linecap="round" transform="rotate(-90 50 50)"/>'
+                '<text x="50" y="50" text-anchor="middle" dominant-baseline="central"'
+                ' font-size="18" font-weight="800" fill="#fff" font-family="Inter,sans-serif">' + str(dr_val) + '</text>'
+                '</svg>'
+                '<div style="font-size:0.65rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#555;margin-top:-0.25rem;">Domain Rating</div>'
+                '<div style="font-size:0.7rem;font-weight:700;color:' + dr_color + ';margin-top:0.15rem;">' + dr_label + ' <span style="color:#444;font-weight:400">/ 100</span></div>'
+                '</div>'
 
-                    <!-- Stats grid -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;flex:1;min-width:220px;">
-                        <div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">
-                            <div style="font-size:1.6rem;font-weight:800;color:#fff;line-height:1;">{fmt_num(m["backlinks"])}</div>
-                            <div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Backlinks</div>
-                        </div>
-                        <div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">
-                            <div style="font-size:1.6rem;font-weight:800;color:#fff;line-height:1;">{fmt_num(m["referring_domains"])}</div>
-                            <div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Ref. Domains</div>
-                        </div>
-                        <div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">
-                            <div style="font-size:1.6rem;font-weight:800;color:{sp_color};line-height:1;">{m["spam_score"]}</div>
-                            <div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Spam Score</div>
-                            <div style="font-size:0.6rem;color:{sp_color};margin-top:0.15rem;">{sp_label}</div>
-                        </div>
-                    </div>
-
-                </div>
-            </div>""", unsafe_allow_html=True)
+                # Stats grid
+                '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;flex:1;min-width:220px;">'
+                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="font-size:1.6rem;font-weight:800;color:#fff;line-height:1;">' + bl + '</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Backlinks</div>'
+                '</div>'
+                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="font-size:1.6rem;font-weight:800;color:#fff;line-height:1;">' + rd + '</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Ref. Domains</div>'
+                '</div>'
+                '<div style="text-align:center;background:#0d0d0d;border-radius:8px;padding:0.75rem 0.5rem;border:1px solid #1a1a1a;">'
+                '<div style="font-size:1.6rem;font-weight:800;color:' + sp_color + ';line-height:1;">' + sp + '</div>'
+                '<div style="font-size:0.62rem;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#444;margin-top:0.3rem;">Spam Score</div>'
+                '<div style="font-size:0.6rem;color:' + sp_color + ';margin-top:0.15rem;">' + sp_label + '</div>'
+                '</div>'
+                '</div>'
+                '</div>'
+                '</div>'
+            )
+            st.markdown(html, unsafe_allow_html=True)
     else:
         st.markdown('<p style="color:#444;font-size:0.83rem;padding:0.5rem 0;">Profile data unavailable — DataForSEO Backlinks API may still be activating.</p>', unsafe_allow_html=True)
 
@@ -772,112 +832,198 @@ elif st.session_state.page == "dashboard":
 
     section_header("2", "Link Building Opportunities")
 
-    cname = client['name'].lower().replace(' ','_')
+    cname = client["name"].lower().replace(" ","_")
+    industry  = client.get("industry","")
+    market    = client.get("market","")
+    language  = client.get("language","")
 
-    # If enriched is empty but raw_domains exist, AI enrichment failed —
-    # fall back to raw data with default category so tabs aren't empty
-    display_domains = enriched if enriched else [
-        {**d, "category": "free", "rationale": "Domain identified via DataForSEO — AI categorization pending.", 
-         "contact_hint": "Check website contact page", "relevance_score": 5, "is_top_influential": False}
-        for d in raw_domains
-    ]
+    # Load-more state
+    for key in ["show_top","show_pub","show_gp","show_bp"]:
+        if key not in st.session_state:
+            st.session_state[key] = 10
 
-    if not display_domains:
-        st.markdown('<div class="exd-alert">No domain data yet — DataForSEO Backlinks API trial may still be activating. The dashboard will populate once the API is live.</div>', unsafe_allow_html=True)
-    else:
-        def get_cat(cat):
-            return [d for d in display_domains if d.get("category") == cat]
+    # AI opportunities cache — run once per session per tab
+    if "ai_opps_cache" not in st.session_state:
+        st.session_state.ai_opps_cache = {}
 
-        top10     = [d for d in display_domains if d.get("is_top_influential")][:10]
-        if not top10:
-            top10 = sorted(display_domains, key=lambda x: x.get("relevance_score", 0), reverse=True)[:10]
+    def get_ai_opps(tab_type):
+        if tab_type not in st.session_state.ai_opps_cache:
+            try:
+                with st.spinner(f"AI researching {tab_type} opportunities…"):
+                    data = ai_opportunities(industry, market, competitors, tab_type)
+                    st.session_state.ai_opps_cache[tab_type] = data
+            except Exception as e:
+                st.warning(f"AI research failed: {e}")
+                st.session_state.ai_opps_cache[tab_type] = []
+        return st.session_state.ai_opps_cache[tab_type]
 
-        free_all      = get_cat("free")
-        paid_all      = get_cat("paid")
-        pub_all       = get_cat("publisher")
-        blog_all      = get_cat("blog")
-        linkdomain_all = get_cat("link_domain")
+    def ai_domain_card(d, key_prefix):
+        """Card for pure AI-generated opportunities (no DataForSEO metrics)."""
+        domain    = d.get("domain","")
+        dr_est    = d.get("dr_estimate", 0)
+        rel       = d.get("relevance_score", 5)
+        rationale = d.get("rationale","")
+        contact   = d.get("contact_hint","Check website contact page")
+        spec      = d.get("specificity","generic")
+        rc        = rel_color(rel)
+        rdot      = '<span class="rel-dot" style="background:' + rc + '"></span>'
+        spec_badge = (
+            '<span class="badge" style="background:rgba(255,107,43,0.15);color:#ff6b2b">Industry</span>'
+            if spec == "industry_specific" else
+            '<span class="badge" style="background:rgba(100,100,100,0.15);color:#666">Generic</span>'
+        )
+        html = (
+            '<div class="domain-card">'
+            '<div class="card-top">'
+            '<div class="card-domain">' + domain + '</div>'
+            '<div class="card-badges">' + spec_badge + '</div>'
+            '</div>'
+            '<div class="card-metrics">'
+            '<div class="card-metric">DR (est.) <span>' + str(dr_est) + '</span></div>'
+            '<div class="card-metric">Relevance <span class="rel-score">' + rdot + ' <span style="color:' + rc + ';font-weight:700">' + str(rel) + '/10</span></span></div>'
+            '</div>'
+            '<div class="card-rationale">' + rationale + '</div>'
+            '</div>'
+        )
+        st.markdown(html, unsafe_allow_html=True)
+        with st.expander("📬 Contact pathway"):
+            st.markdown(f"**Outreach approach:** {contact}")
+            st.markdown(f"[Visit {domain} ↗](https://{domain})")
 
-        # If AI categorized nothing into paid/free/pub/blog, distribute by DR
-        # High DR (60+) = publisher, medium (30-60) = free, low = blog, very low = link_domain
-        if not any([free_all, paid_all, pub_all, blog_all, linkdomain_all]):
-            for d in display_domains:
-                dr = d.get("rank", 0)
-                if dr >= 60:
-                    d["category"] = "publisher"
-                elif dr >= 30:
-                    d["category"] = "free"
-                elif dr >= 10:
-                    d["category"] = "blog"
-                else:
-                    d["category"] = "link_domain"
-            free_all       = get_cat("free")
-            paid_all       = get_cat("paid")
-            pub_all        = get_cat("publisher")
-            blog_all       = get_cat("blog")
-            linkdomain_all = get_cat("link_domain")
+    def render_split_cols(all_items, prefix, export_name, show_key):
+        """Render items split into industry-specific (left) and generic (right) columns."""
+        if not all_items:
+            st.markdown('<p style="color:#444;font-size:0.82rem;padding:0.75rem 0;">No results — try running the analysis again.</p>', unsafe_allow_html=True)
+            return
 
-        # Load-more state keys
-        for key, default in [
-            ("show_free", 10), ("show_paid", 10), ("show_pub", 10),
-            ("show_blog", 10), ("show_linkdom", 10),
-        ]:
-            if key not in st.session_state:
-                st.session_state[key] = default
+        industry_items = [d for d in all_items if d.get("specificity") == "industry_specific"]
+        generic_items  = [d for d in all_items if d.get("specificity") != "industry_specific"]
 
-        def render_with_loadmore(all_items, prefix, export_name, show_key):
-            if not all_items:
-                st.markdown('<p style="color:#444;font-size:0.82rem;padding:0.75rem 0;">No domains in this category.</p>', unsafe_allow_html=True)
-                return
-            visible = all_items[:st.session_state[show_key]]
-            df = pd.DataFrame([{
-                "Domain": d.get("domain",""), "DR": d.get("rank",0),
-                "Backlinks": d.get("backlinks",0), "Spam": d.get("spam_score",0),
-                "Category": d.get("category",""), "Relevance": d.get("relevance_score",""),
-                "Rationale": d.get("rationale",""), "Contact": d.get("contact_hint",""),
-            } for d in all_items])
-            st.download_button(f"⬇ Export all {len(all_items)} as CSV", df.to_csv(index=False).encode(), export_name, "text/csv", key=f"exp_{prefix}")
-            st.markdown("<br>", unsafe_allow_html=True)
-            for i, d in enumerate(visible):
-                domain_card(d, f"{prefix}_{i}")
-            remaining = len(all_items) - len(visible)
-            if remaining > 0:
-                if st.button(f"Load {min(remaining, 10)} more ({remaining} remaining)", key=f"more_{prefix}"):
-                    st.session_state[show_key] += 10
-                    st.rerun()
+        # Export
+        df = pd.DataFrame([{
+            "Domain": d.get("domain",""), "DR Estimate": d.get("dr_estimate",0),
+            "Specificity": d.get("specificity",""), "Relevance": d.get("relevance_score",""),
+            "Rationale": d.get("rationale",""), "Contact": d.get("contact_hint",""),
+        } for d in all_items])
+        st.download_button(
+            f"⬇ Export all {len(all_items)} as CSV",
+            df.to_csv(index=False).encode(), export_name, "text/csv", key=f"exp_{prefix}"
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        tab_top, tab_free, tab_paid, tab_pub, tab_blog, tab_linkdom = st.tabs([
-            "⭐ Top 10",
-            f"Free Guest Posts ({len(free_all)})",
-            f"Paid Placements ({len(paid_all)})",
-            f"Publishers ({len(pub_all)})",
-            f"Blogs ({len(blog_all)})",
-            f"Paid Link Domains ({len(linkdomain_all)})",
-        ])
+        visible_n = st.session_state[show_key]
+        col_l, col_r = st.columns(2)
 
-        with tab_top:
-            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">The 10 most impactful domains for your industry and market — ranked by AI relevance score.</p>', unsafe_allow_html=True)
-            render_list(top10, "top", f"top_influential_{cname}.csv")
+        with col_l:
+            st.markdown(
+                '<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;'
+                'color:#ff6b2b;margin-bottom:0.75rem;padding-bottom:0.4rem;border-bottom:1px solid #1e1e1e;">'
+                + industry + ' — Industry Specific</div>',
+                unsafe_allow_html=True
+            )
+            shown_l = industry_items[:visible_n]
+            if shown_l:
+                for i, d in enumerate(shown_l):
+                    ai_domain_card(d, f"{prefix}_l_{i}")
+            else:
+                st.markdown('<p style="color:#444;font-size:0.78rem;">No industry-specific domains found — check generic list on the right.</p>', unsafe_allow_html=True)
 
-        with tab_free:
-            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains accepting guest posts, editorial contributions or community submissions at no cost.</p>', unsafe_allow_html=True)
-            render_with_loadmore(free_all, "free", f"free_opportunities_{cname}.csv", "show_free")
+        with col_r:
+            st.markdown(
+                '<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;'
+                'color:#666;margin-bottom:0.75rem;padding-bottom:0.4rem;border-bottom:1px solid #1e1e1e;">'
+                'Generic — Any Industry</div>',
+                unsafe_allow_html=True
+            )
+            shown_r = generic_items[:visible_n]
+            if shown_r:
+                for i, d in enumerate(shown_r):
+                    ai_domain_card(d, f"{prefix}_r_{i}")
+            else:
+                st.markdown('<p style="color:#444;font-size:0.78rem;">No generic domains found.</p>', unsafe_allow_html=True)
 
-        with tab_paid:
-            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains offering sponsored content, paid placements or native advertising.</p>', unsafe_allow_html=True)
-            render_with_loadmore(paid_all, "paid", f"paid_placements_{cname}.csv", "show_paid")
+        # Load more based on whichever list is longer
+        remaining = max(len(industry_items), len(generic_items)) - visible_n
+        if remaining > 0:
+            if st.button(f"Load {min(remaining, 10)} more ({remaining} remaining)", key=f"more_{prefix}"):
+                st.session_state[show_key] += 10
+                st.rerun()
 
-        with tab_pub:
-            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Major media outlets, trade publications and industry press.</p>', unsafe_allow_html=True)
-            render_with_loadmore(pub_all, "pub", f"publishers_{cname}.csv", "show_pub")
+    def render_bp(all_items, prefix, export_name, show_key):
+        """Backlink providers — single list, no split needed (all generic)."""
+        if not all_items:
+            st.markdown('<p style="color:#444;font-size:0.82rem;padding:0.75rem 0;">No results.</p>', unsafe_allow_html=True)
+            return
 
-        with tab_blog:
-            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Independent blogs and niche content sites with engaged audiences in your industry.</p>', unsafe_allow_html=True)
-            render_with_loadmore(blog_all, "blog", f"blogs_{cname}.csv", "show_blog")
+        services   = [d for d in all_items if d.get("specificity") == "industry_specific"]
+        directories = [d for d in all_items if d.get("specificity") != "industry_specific"]
 
-        with tab_linkdom:
-            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains primarily used for link-building and authority transfer — directories, paid backlink marketplaces, and guest post networks. Use selectively and verify quality before outreach.</p>', unsafe_allow_html=True)
-            render_with_loadmore(linkdomain_all, "linkdom", f"paid_link_domains_{cname}.csv", "show_linkdom")
+        df = pd.DataFrame([{
+            "Domain": d.get("domain",""), "Relevance": d.get("relevance_score",""),
+            "Rationale": d.get("rationale",""), "Contact": d.get("contact_hint",""),
+        } for d in all_items])
+        st.download_button(f"⬇ Export all {len(all_items)} as CSV", df.to_csv(index=False).encode(), export_name, "text/csv", key=f"exp_{prefix}")
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        col_l, col_r = st.columns(2)
+        visible_n = st.session_state[show_key]
+
+        with col_l:
+            st.markdown(
+                '<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;'
+                'color:#ff6b2b;margin-bottom:0.75rem;padding-bottom:0.4rem;border-bottom:1px solid #1e1e1e;">'
+                'Backlink Services</div>',
+                unsafe_allow_html=True
+            )
+            for i, d in enumerate(services[:visible_n]):
+                ai_domain_card(d, f"{prefix}_s_{i}")
+            if not services:
+                st.markdown('<p style="color:#444;font-size:0.78rem;">No services found.</p>', unsafe_allow_html=True)
+
+        with col_r:
+            st.markdown(
+                '<div style="font-size:0.68rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;'
+                'color:#666;margin-bottom:0.75rem;padding-bottom:0.4rem;border-bottom:1px solid #1e1e1e;">'
+                'Directories & Forums</div>',
+                unsafe_allow_html=True
+            )
+            for i, d in enumerate(directories[:visible_n]):
+                ai_domain_card(d, f"{prefix}_d_{i}")
+            if not directories:
+                st.markdown('<p style="color:#444;font-size:0.78rem;">No directories found.</p>', unsafe_allow_html=True)
+
+        remaining = max(len(services), len(directories)) - visible_n
+        if remaining > 0:
+            if st.button(f"Load {min(remaining,10)} more ({remaining} remaining)", key=f"more_{prefix}"):
+                st.session_state[show_key] += 10
+                st.rerun()
+
+    tab_top, tab_pub, tab_gp, tab_bp = st.tabs([
+        "⭐ Top Opportunities",
+        "Publishers",
+        "Guest Posting",
+        "Backlink Providers",
+    ])
+
+    with tab_top:
+        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">The highest-impact domains for link building in your industry and market — influenced by your competitor profiles.</p>', unsafe_allow_html=True)
+        data = get_ai_opps("top")
+        render_split_cols(data, "top", f"top_opportunities_{cname}.csv", "show_top")
+
+    with tab_pub:
+        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Media outlets, news sites, trade publications and high-authority editorial platforms — industry-specific on the left, major generic publishers on the right.</p>', unsafe_allow_html=True)
+        data = get_ai_opps("publishers")
+        render_split_cols(data, "pub", f"publishers_{cname}.csv", "show_pub")
+
+    with tab_gp:
+        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Domains with active guest posting or contributor programs — where you can publish an article and link back to your website.</p>', unsafe_allow_html=True)
+        data = get_ai_opps("guest_posting")
+        render_split_cols(data, "gp", f"guest_posting_{cname}.csv", "show_gp")
+
+    with tab_bp:
+        st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Platforms and services that provide backlinks — left column shows known backlink services (FatJoe, Adsy, etc.), right shows directories and forum placements relevant to your market.</p>', unsafe_allow_html=True)
+        data = get_ai_opps("backlink_providers")
+        render_bp(data, "bp", f"backlink_providers_{cname}.csv", "show_bp")
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -899,10 +1045,15 @@ elif st.session_state.page == "dashboard":
         for d in raw_domains
     ]
 
-    missed_all = sorted(
-        [{**d, "is_missed": True} for d in source_pool if d.get("source") == "intersection"],
-        key=lambda x: x.get("rank", 0), reverse=True
-    )
+    # Missed opportunities: intersection domains first, fall back to top referring if empty
+    missed_raw = [d for d in source_pool if d.get("source") == "intersection"]
+    if not missed_raw:
+        # Fallback: top referring domains from competitors = domains client is missing
+        missed_raw = sorted(
+            [d for d in source_pool if d.get("source") == "referring"],
+            key=lambda x: x.get("rank", 0), reverse=True
+        )[:30]
+    missed_all = [{**d, "is_missed": True} for d in missed_raw]
 
     top_comp_sources_all = sorted(
         [d for d in source_pool if d.get("source") == "referring"],
