@@ -417,36 +417,48 @@ def ai_generate_content(topic, length, tone, language, brand_terms, target_promp
     model  = get_gemini()
     prompt = f"""You are a senior content strategist writing for {client_name} in {industry}.
 
-Write a guest post / outreach article with these specifications:
+Generate a complete content package as a single JSON object. Return ONLY valid JSON, no markdown fences.
+
+Specifications:
 - Topic: {topic}
 - Word count: {length} words
 - Tone: {tone}
-- Language: write the entire article in {language}
+- Language: {language}
 - Brand terms (use naturally): {brand_terms}
 - AI prompts / questions to target: {target_prompts}
 - Primary keyword: {primary_kw}
 - Secondary keywords: {secondary_kws}
 - Client website: {client_url}
 
-Formatting requirements:
-- Use markdown: ## for H2, ### for H3
-- Make ALL H2 and H3 headings bold using **heading text**
-- Bold every instance of the primary keyword and secondary keywords throughout the article using **keyword**
-- Primary keyword must appear in the title, first paragraph, and at least 2 subheadings
-- Secondary keywords woven naturally throughout
-- Brand terms authentic, not forced
-- Non-salesy conclusion
-- Do NOT include byline, author bio, or meta description
+Return this exact JSON structure:
+{{
+  "article": "Full article in markdown. Use ## for H2, ### for H3. Make headings bold: **Heading**. Bold every instance of the primary and secondary keywords using **keyword**. Primary keyword in title, first paragraph, and at least 2 subheadings. Brand terms natural not forced. Non-salesy conclusion. No byline, bio, or meta description.",
+  "internal_links": [
+    {{"anchor": "anchor text suggestion", "page_type": "e.g. project page / blog post / contact page", "reason": "one sentence why this link adds value"}},
+    {{"anchor": "anchor text suggestion", "page_type": "page type", "reason": "reason"}},
+    {{"anchor": "anchor text suggestion", "page_type": "page type", "reason": "reason"}}
+  ],
+  "schema_tags": [
+    {{"type": "Schema type e.g. Article / FAQPage / BreadcrumbList", "rationale": "one sentence why this schema applies", "example": "Short JSON-LD snippet showing the key fields to implement"}}
+  ]
+}}
 
-Internal linking:
-- At the end of the article, add a section titled "## **Internal Link Suggestions**"
-- Suggest 3 internal links the editor should add when publishing on {client_url}
-- Format each as: [Anchor text suggestion] → Page type: (e.g. project page, blog post, contact page, about page) — Reason: (one sentence why this link adds value here)
-- These are editorial suggestions — the publisher will map real URLs
+Generate 3 internal link suggestions and 2-3 schema recommendations appropriate for this content and industry."""
 
-Write the full article now."""
-    r = model.generate_content(prompt, generation_config={"max_output_tokens": 4096})
-    return r.text
+    r    = model.generate_content(prompt, generation_config={"max_output_tokens": 8192})
+    raw  = r.text.strip().replace("```json","").replace("```","").strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end   = raw.rfind("}")
+        if start != -1 and end != -1:
+            try:
+                return json.loads(raw[start:end+1])
+            except:
+                pass
+        # Fallback: return raw text as article only
+        return {"article": raw, "internal_links": [], "schema_tags": []}
 
 # ── Session state ─────────────────────────────────────────────────────────────
 
@@ -1143,7 +1155,7 @@ elif st.session_state.page == "dashboard":
             for comp in competitor_list:
                 comp_domains_raw = [d for d in raw_domains if d.get("competitor") == comp and d.get("source") == "referring"]
                 # Enrich with AI data where available, else use raw
-                enriched_map = {d.get("domain"): d for d in source_pool}
+                enriched_map = {d.get("domain"): d for d in (enriched if enriched else raw_domains)}
                 comp_domains = []
                 for d in sorted(comp_domains_raw, key=lambda x: x.get("rank",0), reverse=True):
                     enriched_d = enriched_map.get(d["domain"], d)
@@ -1223,19 +1235,19 @@ elif st.session_state.page == "content":
 
     c1, c2 = st.columns(2)
     with c1:
-        topic       = st.text_input("Article Topic", placeholder="e.g. The future of sustainable real estate in the UAE")
-        tone        = st.selectbox("Tone of Voice", [
+        topic        = st.text_input("Article Topic", placeholder="e.g. The future of sustainable real estate in the UAE")
+        primary_kw   = st.text_input("Primary Keyword", placeholder="e.g. luxury real estate Dubai")
+        secondary_kws = st.text_input("Secondary Keywords", placeholder="e.g. Dubai property investment, off-plan real estate UAE")
+        brand_terms  = st.text_input("Brand Terms", placeholder="e.g. Sobha Realty, Sobha Hartland")
+        content_lang = st.selectbox("Content Language", ["English", "Arabic", "French"])
+    with c2:
+        length         = st.number_input("Word Count", min_value=300, max_value=3000, value=800, step=100)
+        tone           = st.selectbox("Tone of Voice", [
             "Authoritative & Expert","Conversational & Friendly",
             "Thought Leadership","Educational & Informative","Journalistic","Persuasive"
         ])
-        content_lang = st.selectbox("Content Language", ["English", "Arabic", "French"])
-        primary_kw  = st.text_input("Primary Keyword", placeholder="e.g. luxury real estate Dubai")
-        brand_terms = st.text_input("Brand Terms", placeholder="e.g. Sobha Realty, Sobha Hartland")
-    with c2:
-        length         = st.number_input("Word Count", min_value=300, max_value=3000, value=800, step=100)
-        target_prompts = st.text_area("AI Prompts / Questions to Target", height=104,
+        target_prompts = st.text_area("AI Prompts / Questions to Target", height=160,
                                        placeholder="e.g. What is the best real estate developer in Dubai?\nWhy invest in Dubai property in 2025?")
-        secondary_kws  = st.text_input("Secondary Keywords", placeholder="e.g. Dubai property investment, off-plan real estate UAE")
 
     st.markdown("<br>", unsafe_allow_html=True)
     gen = st.button("✦  Generate Content", use_container_width=True)
@@ -1261,12 +1273,75 @@ elif st.session_state.page == "content":
         section_header("2", "Generated Content — Review Before Use")
         st.markdown('<div class="exd-alert">⚠ AI-generated. Must be reviewed and edited by your team before outreach or publication.</div>', unsafe_allow_html=True)
 
-        edited = st.text_area(
-            "Edit content",
-            value=st.session_state.generated_content,
-            height=600,
-            label_visibility="collapsed"
-        )
+        content_data = st.session_state.generated_content
+        # Handle both old string format and new dict format
+        if isinstance(content_data, dict):
+            article_text    = content_data.get("article", "")
+            internal_links  = content_data.get("internal_links", [])
+            schema_tags     = content_data.get("schema_tags", [])
+        else:
+            article_text   = content_data
+            internal_links = []
+            schema_tags    = []
+
+        # ── Article — rendered preview + editable raw ──
+        tab_preview, tab_edit = st.tabs(["👁 Preview", "✏️ Edit Raw"])
+
+        with tab_preview:
+            st.markdown('<div style="background:#111;border:1px solid #1e1e1e;border-radius:8px;padding:1.5rem 2rem;line-height:1.8;font-size:0.9rem;">', unsafe_allow_html=True)
+            st.markdown(article_text)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with tab_edit:
+            article_text = st.text_area(
+                "Edit article",
+                value=article_text,
+                height=500,
+                label_visibility="collapsed"
+            )
+
+        edited = article_text
+
+        # ── Internal Link Suggestions ─────────────────────────────────────────
+        if internal_links:
+            st.markdown("<br>", unsafe_allow_html=True)
+            section_header("3", "Internal Link Suggestions")
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Add these links when publishing on ' + target_domain + '. Map real URLs to the anchor text before going live.</p>', unsafe_allow_html=True)
+            for i, link in enumerate(internal_links):
+                anchor    = link.get("anchor","")
+                page_type = link.get("page_type","")
+                reason    = link.get("reason","")
+                st.markdown(
+                    '<div style="background:#111;border:1px solid #1e1e1e;border-left:3px solid #ff6b2b;border-radius:8px;padding:0.9rem 1.1rem;margin-bottom:0.6rem;">' +
+                    '<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.35rem;">' +
+                    '<span style="font-size:0.75rem;font-weight:800;color:#fff;">' + anchor + '</span>' +
+                    '<span style="font-size:0.65rem;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;color:#ff6b2b;background:rgba(255,107,43,0.1);padding:0.15rem 0.4rem;border-radius:3px;">' + page_type + '</span>' +
+                    '</div>' +
+                    '<div style="font-size:0.75rem;color:#666;">' + reason + '</div>' +
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+
+        # ── Schema Tag Recommendations ────────────────────────────────────────
+        if schema_tags:
+            st.markdown("<br>", unsafe_allow_html=True)
+            section_header("4", "Recommended Schema Tags")
+            st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Implement these structured data tags on the page to improve search visibility and AI discoverability.</p>', unsafe_allow_html=True)
+            for schema in schema_tags:
+                stype     = schema.get("type","")
+                rationale = schema.get("rationale","")
+                example   = schema.get("example","")
+                st.markdown(
+                    '<div style="background:#111;border:1px solid #1e1e1e;border-left:3px solid #8b5cf6;border-radius:8px;padding:0.9rem 1.1rem;margin-bottom:0.75rem;">' +
+                    '<div style="font-size:0.75rem;font-weight:800;color:#8b5cf6;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.25rem;">' + stype + '</div>' +
+                    '<div style="font-size:0.78rem;color:#888;margin-bottom:0.6rem;">' + rationale + '</div>' +
+                    '<div style="font-size:0.72rem;color:#555;background:#0d0d0d;border-radius:5px;padding:0.5rem 0.75rem;font-family:monospace;white-space:pre-wrap;border:1px solid #1a1a1a;">' + example + '</div>' +
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_header("5", "Download")
 
         # ── Word document export ──────────────────────────────────────────────
         def build_docx(markdown_text, title, client_name):
