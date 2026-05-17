@@ -812,7 +812,7 @@ elif st.session_state.page == "dashboard":
                 '<div style="font-size:0.65rem;font-weight:700;letter-spacing:0.12em;'
                 'text-transform:uppercase;color:' + role_color + ';margin-bottom:0.3rem;">' + role_text + '</div>'
                 '<div style="font-size:1rem;font-weight:800;color:#fff;margin-bottom:1.25rem;">' + label + '</div>'
-                '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:1rem;align-items:start;">'
+                '<div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:1rem;align-items:stretch;">'
 
                 # DR column
                 '<div style="background:#0d0d0d;border-radius:8px;padding:1rem;border:1px solid #1a1a1a;">'
@@ -861,6 +861,28 @@ elif st.session_state.page == "dashboard":
     industry  = client.get("industry","")
     market    = client.get("market","")
     language  = client.get("language","")
+
+    # Pre-load competitive intelligence data immediately (not tab-gated)
+    source_pool_pre = enriched if enriched else [
+        {**d, "category": "free", "rationale": "", "contact_hint": "Check website contact page",
+         "relevance_score": 5, "is_top_influential": False}
+        for d in raw_domains
+    ]
+    missed_raw_pre = [d for d in source_pool_pre if d.get("source") == "intersection"]
+    if not missed_raw_pre:
+        missed_raw_pre = sorted(
+            [d for d in source_pool_pre if d.get("source") == "referring"],
+            key=lambda x: x.get("rank", 0), reverse=True
+        )[:30]
+    st.session_state["_ci_missed"]       = [{**d, "is_missed": True} for d in missed_raw_pre]
+    st.session_state["_ci_top_sources"]  = sorted(
+        [d for d in source_pool_pre if d.get("source") == "referring"],
+        key=lambda x: x.get("rank", 0), reverse=True
+    )
+    st.session_state["_ci_intersection"] = sorted(
+        [d for d in source_pool_pre if d.get("source") == "intersection"],
+        key=lambda x: x.get("rank", 0), reverse=True
+    )
 
     # Load-more state
     for key in ["show_top","show_pub","show_gp","show_bp"]:
@@ -1063,32 +1085,10 @@ elif st.session_state.page == "dashboard":
         if key not in st.session_state:
             st.session_state[key] = default
 
-    # Build signals from enriched or raw fallback
-    source_pool = enriched if enriched else [
-        {**d, "category": "free", "rationale": "", "contact_hint": "Check website contact page",
-         "relevance_score": 5, "is_top_influential": False}
-        for d in raw_domains
-    ]
-
-    # Missed opportunities: intersection domains first, fall back to top referring if empty
-    missed_raw = [d for d in source_pool if d.get("source") == "intersection"]
-    if not missed_raw:
-        # Fallback: top referring domains from competitors = domains client is missing
-        missed_raw = sorted(
-            [d for d in source_pool if d.get("source") == "referring"],
-            key=lambda x: x.get("rank", 0), reverse=True
-        )[:30]
-    missed_all = [{**d, "is_missed": True} for d in missed_raw]
-
-    top_comp_sources_all = sorted(
-        [d for d in source_pool if d.get("source") == "referring"],
-        key=lambda x: x.get("rank", 0), reverse=True
-    )
-
-    intersection_all = sorted(
-        [d for d in source_pool if d.get("source") == "intersection"],
-        key=lambda x: x.get("rank", 0), reverse=True
-    )
+    # Use pre-loaded competitive intelligence data
+    missed_all           = st.session_state.get("_ci_missed", [])
+    top_comp_sources_all = st.session_state.get("_ci_top_sources", [])
+    intersection_all     = st.session_state.get("_ci_intersection", [])
 
     # Unique per competitor — group raw_domains by competitor
     competitor_list = list(dict.fromkeys(
@@ -1205,18 +1205,16 @@ elif st.session_state.page == "content":
 
     section_header("1", "Content Brief")
 
-    # Target domain — use top influential from analysis if available, else fall back to client URL
-    top_domains   = [d["domain"] for d in enriched if d.get("is_top_influential")][:10]
-    all_domains   = [d["domain"] for d in enriched][:20]
-    default_domain = top_domains[0] if top_domains else (all_domains[0] if all_domains else clean_domain(client.get("url","")))
-
-    if top_domains or all_domains:
-        target_options = top_domains if top_domains else all_domains
-        target_domain  = st.selectbox("Target Domain", target_options,
-                                       help="Domains from your backlink analysis — select the one you're writing for.")
-    else:
-        target_domain = clean_domain(client.get("url", ""))
-        st.markdown(f'<div style="background:#141414;border:1px solid #242424;border-radius:6px;padding:0.6rem 0.9rem;font-size:0.82rem;color:#888;margin-bottom:0.75rem;">Target Domain &nbsp;<span style="color:#fff;font-weight:600">{target_domain}</span> &nbsp;<span style="color:#444;font-size:0.7rem">(run a backlink analysis to unlock domain-specific targeting)</span></div>', unsafe_allow_html=True)
+    # Target domain — always the client URL entered in step 1
+    target_domain = clean_domain(client.get("url", ""))
+    st.markdown(
+        '<div style="margin-bottom:0.75rem;">' +
+        '<div style="font-size:0.72rem;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:#666;margin-bottom:0.35rem;">Target Domain</div>' +
+        '<div style="background:#141414;border:1px solid #242424;border-radius:6px;padding:0.65rem 1rem;font-size:0.9rem;font-weight:700;color:#fff;">' +
+        target_domain +
+        '</div></div>',
+        unsafe_allow_html=True
+    )
 
     c1, c2 = st.columns(2)
     with c1:
