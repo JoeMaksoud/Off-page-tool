@@ -413,6 +413,54 @@ relevance_score: integer 1-10 for how valuable this is for {industry} in {market
 
     return sorted(data, key=lambda x: x.get("relevance_score", 0), reverse=True)
 
+def ai_generate_topics(industry, market, language, primary_kw="", secondary_kws=""):
+    """Generate fresh topic ideas using Gemini with Google Search grounding."""
+    model  = get_gemini()
+    kw_context = f"Keywords to consider: {primary_kw}" if primary_kw else ""
+    sec_context = f"Secondary keywords: {secondary_kws}" if secondary_kws else ""
+
+    prompt = f"""You are a senior content strategist and SEO expert.
+
+Generate 6 highly relevant, timely article topic ideas for a brand in {industry} targeting the {market} market.
+Language/audience: {language}
+{kw_context}
+{sec_context}
+
+Use your knowledge of current industry trends, recent news, search behavior, and content gaps to suggest topics that are:
+- Timely and relevant to what audiences are searching for right now
+- Varied in content angle (mix of thought leadership, how-to, data-driven, news-reactive, listicle, opinion)
+- Specific enough to rank — not generic
+- Suitable for guest posting or outreach content
+
+Return ONLY a valid JSON array, no markdown, no explanation:
+[
+  {{
+    "topic": "Full article title as it would appear published",
+    "angle": "thought leadership | how-to | data-driven | news-reactive | listicle | opinion | case study",
+    "rationale": "One sentence explaining why this topic is timely and relevant right now — reference a trend, news event, or search signal.",
+    "suggested_keyword": "the primary keyword this article should target"
+  }}
+]
+
+Make all 6 topics distinct — different angles, different subtopics within {industry}."""
+
+    r   = model.generate_content(
+        prompt,
+        generation_config={"max_output_tokens": 2048}
+    )
+    raw = r.text.strip().replace("```json","").replace("```","").strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("[")
+        end   = raw.rfind("]")
+        if start != -1 and end != -1:
+            try:
+                return json.loads(raw[start:end+1])
+            except:
+                pass
+        return []
+
 def ai_generate_content(topic, length, tone, language, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry, client_url):
     model  = get_gemini()
     prompt = f"""You are a senior content strategist writing for {client_name} in {industry}.
@@ -1225,7 +1273,7 @@ elif st.session_state.page == "content":
     # Target domain — always the client URL entered in step 1
     target_domain = clean_domain(client.get("url", ""))
     st.markdown(
-        '<div style="margin-bottom:0.75rem;">' +
+        '<div style="margin-bottom:1.25rem;">' +
         '<div style="font-size:0.72rem;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:#666;margin-bottom:0.35rem;">Target Domain</div>' +
         '<div style="background:#141414;border:1px solid #242424;border-radius:6px;padding:0.65rem 1rem;font-size:0.9rem;font-weight:700;color:#fff;">' +
         target_domain +
@@ -1233,10 +1281,82 @@ elif st.session_state.page == "content":
         unsafe_allow_html=True
     )
 
+    # ── Topic Generator ───────────────────────────────────────────────────────
+    st.markdown("""
+    <div style="background:#111;border:1px solid #1e1e1e;border-radius:10px;padding:1.25rem 1.5rem;margin-bottom:1.5rem;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem;">
+            <div>
+                <div style="font-size:0.75rem;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#ff6b2b;">Topic Generator</div>
+                <div style="font-size:0.78rem;color:#555;margin-top:0.2rem;">AI-powered topic ideas based on industry trends, search behavior and news. Click to regenerate.</div>
+            </div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+    gen_col, _ = st.columns([1, 3])
+    with gen_col:
+        generate_topics = st.button("✦  Generate Topic Ideas", key="gen_topics", use_container_width=True)
+
+    if generate_topics:
+        with st.spinner("Researching trends and generating topics…"):
+            try:
+                topics_data = ai_generate_topics(
+                    client.get("industry",""),
+                    client.get("market",""),
+                    client.get("language","English"),
+                )
+                st.session_state["topic_suggestions"] = topics_data
+            except Exception as e:
+                st.error(f"Topic generation failed: {e}")
+
+    # Angle color map
+    angle_colors = {
+        "thought leadership": "#8b5cf6",
+        "how-to":            "#3b82f6",
+        "data-driven":       "#22c55e",
+        "news-reactive":     "#ef4444",
+        "listicle":          "#eab308",
+        "opinion":           "#ff6b2b",
+        "case study":        "#14b8a6",
+    }
+
+    if st.session_state.get("topic_suggestions"):
+        suggestions = st.session_state["topic_suggestions"]
+        cols = st.columns(2)
+        for i, t in enumerate(suggestions):
+            topic_title  = t.get("topic","")
+            angle        = t.get("angle","").lower()
+            rationale    = t.get("rationale","")
+            suggested_kw = t.get("suggested_keyword","")
+            angle_color  = angle_colors.get(angle, "#ff6b2b")
+
+            with cols[i % 2]:
+                st.markdown(
+                    '<div style="background:#0d0d0d;border:1px solid #1e1e1e;border-left:3px solid ' + angle_color + ';border-radius:8px;padding:1rem 1.1rem;margin-bottom:0.75rem;">' +
+                    '<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">' +
+                    '<span style="font-size:0.6rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:' + angle_color + ';background:rgba(0,0,0,0.3);padding:0.15rem 0.4rem;border-radius:3px;">' + angle + '</span>' +
+                    '</div>' +
+                    '<div style="font-size:0.85rem;font-weight:700;color:#fff;margin-bottom:0.4rem;line-height:1.4;">' + topic_title + '</div>' +
+                    '<div style="font-size:0.72rem;color:#666;line-height:1.5;margin-bottom:0.5rem;">' + rationale + '</div>' +
+                    ('<div style="font-size:0.68rem;color:#444;">🔑 ' + suggested_kw + '</div>' if suggested_kw else '') +
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+                if st.button(f"Use this topic", key=f"use_topic_{i}"):
+                    st.session_state["selected_topic"]  = topic_title
+                    st.session_state["selected_kw"]     = suggested_kw
+                    st.rerun()
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # Pre-fill from selected topic if available
+    prefill_topic = st.session_state.pop("selected_topic", None)
+    prefill_kw    = st.session_state.pop("selected_kw", None)
+
+    # ── Content Brief Form ────────────────────────────────────────────────────
     c1, c2 = st.columns(2)
     with c1:
-        topic        = st.text_input("Article Topic", placeholder="e.g. The future of sustainable real estate in the UAE")
-        primary_kw   = st.text_input("Primary Keyword", placeholder="e.g. luxury real estate Dubai")
+        topic        = st.text_input("Article Topic", value=prefill_topic or "", placeholder="e.g. The future of sustainable real estate in the UAE")
+        primary_kw   = st.text_input("Primary Keyword", value=prefill_kw or "", placeholder="e.g. luxury real estate Dubai")
         secondary_kws = st.text_input("Secondary Keywords", placeholder="e.g. Dubai property investment, off-plan real estate UAE")
         brand_terms  = st.text_input("Brand Terms", placeholder="e.g. Sobha Realty, Sobha Hartland")
         content_lang = st.selectbox("Content Language", ["English", "Arabic", "French"])
