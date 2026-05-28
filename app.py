@@ -447,7 +447,7 @@ Return ONLY a valid JSON array, no markdown, no explanation:
   {{
     "topic": "Full article title — must feel current and forward-looking for 2025-2026",
     "angle": "thought leadership | how-to | data-driven | news-reactive | listicle | opinion | case study",
-    "rationale": "One sentence citing the specific 2025-2026 trend or signal that makes this relevant right now.",
+    "rationale": "Max 15 words — the 2025-2026 trend or signal making this relevant now.",
     "suggested_keyword": "the primary keyword this article should target"
   }}
 ]
@@ -456,7 +456,7 @@ Make all 6 topics distinct angles within {industry}. Every topic must belong in 
 
     r   = model.generate_content(
         prompt,
-        generation_config={"max_output_tokens": 2048}
+        generation_config={"max_output_tokens": 4096}
     )
     raw = r.text
 
