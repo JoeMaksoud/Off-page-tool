@@ -1492,21 +1492,18 @@ elif st.session_state.page == "content":
                     unsafe_allow_html=True
                 )
                 if st.button(f"Use this topic", key=f"use_topic_{i}"):
-                    st.session_state["selected_topic"]  = topic_title
-                    st.session_state["selected_kw"]     = suggested_kw
+                    st.session_state["content_topic"]   = topic_title
+                    st.session_state["content_kw"]      = suggested_kw
                     st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
     # Pre-fill from selected topic if available
-    prefill_topic = st.session_state.pop("selected_topic", None)
-    prefill_kw    = st.session_state.pop("selected_kw", None)
-
     # ── Content Brief Form ────────────────────────────────────────────────────
     c1, c2 = st.columns(2)
     with c1:
-        topic         = st.text_input("Article Topic", value=prefill_topic or "", placeholder="e.g. The future of sustainable real estate in the UAE")
-        primary_kw    = st.text_input("Primary Keyword", value=prefill_kw or "", placeholder="e.g. luxury real estate Dubai")
+        topic         = st.text_input("Article Topic", key="content_topic", placeholder="e.g. The future of sustainable real estate in the UAE")
+        primary_kw    = st.text_input("Primary Keyword", key="content_kw", placeholder="e.g. luxury real estate Dubai")
         secondary_kws = st.text_input("Secondary Keywords", placeholder="e.g. Dubai property investment, off-plan real estate UAE")
         brand_terms   = st.text_input("Brand Terms", placeholder="e.g. Sobha Realty, Sobha Hartland")
         content_lang  = st.selectbox("Content Language", ["English", "Arabic", "French"])
