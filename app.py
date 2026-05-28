@@ -459,17 +459,28 @@ Make all 6 topics distinct angles within {industry}. Every topic must belong in 
         generation_config={"max_output_tokens": 2048}
     )
     raw = r.text.strip().replace("```json","").replace("```","").strip()
+
+    # Try direct parse
     try:
-        return json.loads(raw)
+        result = json.loads(raw)
+        if isinstance(result, list) and result:
+            return result
     except json.JSONDecodeError:
-        start = raw.find("[")
-        end   = raw.rfind("]")
-        if start != -1 and end != -1:
-            try:
-                return json.loads(raw[start:end+1])
-            except:
-                pass
-        return []
+        pass
+
+    # Try extracting array
+    start = raw.find("[")
+    end   = raw.rfind("]")
+    if start != -1 and end != -1:
+        try:
+            result = json.loads(raw[start:end+1])
+            if isinstance(result, list) and result:
+                return result
+        except:
+            pass
+
+    # Raise with raw response so caller can surface it
+    raise ValueError(f"Could not parse topics from Gemini response. Raw output (first 500 chars): {raw[:500]}")
 
 def fetch_sitemap_pages(domain):
     import xml.etree.ElementTree as ET
@@ -1417,13 +1428,11 @@ elif st.session_state.page == "content":
                     client.get("market",""),
                     client.get("language","English"),
                 )
-                if topics_data:
-                    st.session_state["topic_suggestions"] = topics_data
-                    st.rerun()
-                else:
-                    st.warning("No topics returned — try again.")
+                st.session_state["topic_suggestions"] = topics_data
+                st.rerun()
             except Exception as e:
                 st.error(f"Topic generation failed: {e}")
+                st.info("Tip: Make sure your Gemini API key is valid and the industry/market fields are filled in.")
 
     # Angle color map
     angle_colors = {
