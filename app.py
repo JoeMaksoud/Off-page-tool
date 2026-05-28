@@ -1417,7 +1417,11 @@ elif st.session_state.page == "content":
                     client.get("market",""),
                     client.get("language","English"),
                 )
-                st.session_state["topic_suggestions"] = topics_data
+                if topics_data:
+                    st.session_state["topic_suggestions"] = topics_data
+                    st.rerun()
+                else:
+                    st.warning("No topics returned — try again.")
             except Exception as e:
                 st.error(f"Topic generation failed: {e}")
 
@@ -1641,14 +1645,24 @@ elif st.session_state.page == "content":
             section_header("4", "Recommended Schema Tags")
             st.markdown('<p style="color:#555;font-size:0.78rem;margin-bottom:1rem;">Implement these structured data tags on the page to improve search visibility and AI discoverability.</p>', unsafe_allow_html=True)
             for schema in schema_tags:
-                stype     = schema.get("type","")
-                rationale = schema.get("rationale","")
-                example   = schema.get("example","")
+                stype     = str(schema.get("type",""))
+                rationale = str(schema.get("rationale",""))
+                # example may come back as a dict — serialize it cleanly
+                ex_raw    = schema.get("example","")
+                if isinstance(ex_raw, dict):
+                    import json as _json
+                    example = _json.dumps(ex_raw, indent=2)
+                elif isinstance(ex_raw, str):
+                    example = ex_raw
+                else:
+                    example = str(ex_raw)
+                # Escape HTML special chars in the code block
+                example_safe = example.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
                 st.markdown(
                     '<div style="background:#111;border:1px solid #1e1e1e;border-left:3px solid #8b5cf6;border-radius:8px;padding:0.9rem 1.1rem;margin-bottom:0.75rem;">' +
                     '<div style="font-size:0.75rem;font-weight:800;color:#8b5cf6;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:0.25rem;">' + stype + '</div>' +
                     '<div style="font-size:0.78rem;color:#888;margin-bottom:0.6rem;">' + rationale + '</div>' +
-                    '<div style="font-size:0.72rem;color:#555;background:#0d0d0d;border-radius:5px;padding:0.5rem 0.75rem;font-family:monospace;white-space:pre-wrap;border:1px solid #1a1a1a;">' + example + '</div>' +
+                    '<div style="font-size:0.72rem;color:#555;background:#0d0d0d;border-radius:5px;padding:0.5rem 0.75rem;font-family:monospace;white-space:pre-wrap;border:1px solid #1a1a1a;">' + example_safe + '</div>' +
                     '</div>',
                     unsafe_allow_html=True
                 )
