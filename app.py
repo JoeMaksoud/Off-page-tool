@@ -458,29 +458,53 @@ Make all 6 topics distinct angles within {industry}. Every topic must belong in 
         prompt,
         generation_config={"max_output_tokens": 2048}
     )
-    raw = r.text.strip().replace("```json","").replace("```","").strip()
+    raw = r.text
+
+    # Aggressive cleaning
+    import re as _re
+    # Remove markdown fences with any language tag
+    raw = _re.sub(r"```[a-zA-Z]*", "", raw)
+    raw = raw.replace("`", "").strip()
 
     # Try direct parse
     try:
         result = json.loads(raw)
         if isinstance(result, list) and result:
             return result
-    except json.JSONDecodeError:
+    except:
         pass
 
-    # Try extracting array
+    # Find outermost JSON array using bracket counting
     start = raw.find("[")
-    end   = raw.rfind("]")
-    if start != -1 and end != -1:
+    if start != -1:
+        depth, end = 0, -1
+        for i, ch in enumerate(raw[start:], start):
+            if ch == "[": depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end != -1:
+            try:
+                result = json.loads(raw[start:end+1])
+                if isinstance(result, list) and result:
+                    return result
+            except:
+                pass
+
+    # Last resort: extract individual objects and build array manually
+    objects = _re.findall(r'\{[^{}]+\}', raw, _re.DOTALL)
+    parsed_objects = []
+    for obj in objects:
         try:
-            result = json.loads(raw[start:end+1])
-            if isinstance(result, list) and result:
-                return result
+            parsed_objects.append(json.loads(obj))
         except:
             pass
+    if parsed_objects:
+        return parsed_objects
 
-    # Raise with raw response so caller can surface it
-    raise ValueError(f"Could not parse topics from Gemini response. Raw output (first 500 chars): {raw[:500]}")
+    raise ValueError(f"Could not parse topics. Raw (500 chars): {raw[:500]}")
 
 def fetch_sitemap_pages(domain):
     import xml.etree.ElementTree as ET
