@@ -213,15 +213,19 @@ def fetch_summaries(domains):
     return out
 
 def fetch_intersection(competitors, exclude):
+    """
+    DataForSEO domain intersection: finds domains linking to ALL competitors
+    but NOT to the client (exclude). Each result item represents a referring domain.
+    The item itself has rank/backlinks — domain_intersection sub-keys show
+    per-target data. We read the top-level item fields.
+    """
     targets = {str(i+1): clean_domain(d) for i, d in enumerate(competitors)}
     payload = [{
         "targets":                    targets,
         "exclude_targets":            [clean_domain(exclude)],
-        "limit":                      60,
-        "order_by":                   ["1.rank,desc"],
+        "limit":                      100,
+        "order_by":                   ["rank,desc"],
         "exclude_internal_backlinks": True,
-        "backlinks_filters":          ["dofollow", "=", True],
-        "filters":                    ["backlinks_spam_score", "<", 40],
     }]
     data  = dfs_post("backlinks/domain_intersection/live", payload)
     items = []
@@ -229,13 +233,21 @@ def fetch_intersection(competitors, exclude):
         if task.get("result"):
             for r in task["result"]:
                 for item in r.get("items", []):
-                    first = item.get("domain_intersection", {}).get("1", {})
-                    if first.get("target"):
+                    # The domain field at the item level is the linking domain
+                    domain = item.get("domain", "")
+                    if not domain:
+                        # Try extracting from domain_intersection sub-structure
+                        di = item.get("domain_intersection", {})
+                        for key in di:
+                            if di[key].get("target"):
+                                domain = di[key]["target"]
+                                break
+                    if domain:
                         items.append({
-                            "domain":     first.get("target", ""),
-                            "rank":       first.get("rank", 0),
-                            "backlinks":  first.get("backlinks", 0),
-                            "spam_score": first.get("backlinks_spam_score", 0),
+                            "domain":     domain,
+                            "rank":       item.get("rank", 0),
+                            "backlinks":  item.get("backlinks", 0),
+                            "spam_score": item.get("backlinks_spam_score", 0),
                             "source":     "intersection",
                         })
     return items
@@ -426,23 +438,21 @@ Language/audience: {language}
 {kw_context}
 {sec_context}
 
-Use your knowledge of current industry trends, recent news, search behavior, and content gaps to suggest topics that are:
-- Timely and relevant to what audiences are searching for right now
-- Varied in content angle (mix of thought leadership, how-to, data-driven, news-reactive, listicle, opinion)
-- Specific enough to rank — not generic
-- Suitable for guest posting or outreach content
+CRITICAL: ALL topics must be 2025-2026 only. No retrospectives, no 2024 lookbacks.
+Focus on what is HAPPENING NOW or ABOUT TO HAPPEN — upcoming trends, emerging tech, anticipated shifts, regulatory changes, market forecasts.
+Topics should help the audience ANTICIPATE and PREPARE, not recap the past.
 
 Return ONLY a valid JSON array, no markdown, no explanation:
 [
   {{
-    "topic": "Full article title as it would appear published",
+    "topic": "Full article title — must feel current and forward-looking for 2025-2026",
     "angle": "thought leadership | how-to | data-driven | news-reactive | listicle | opinion | case study",
-    "rationale": "One sentence explaining why this topic is timely and relevant right now — reference a trend, news event, or search signal.",
+    "rationale": "One sentence citing the specific 2025-2026 trend or signal that makes this relevant right now.",
     "suggested_keyword": "the primary keyword this article should target"
   }}
 ]
 
-Make all 6 topics distinct — different angles, different subtopics within {industry}."""
+Make all 6 topics distinct angles within {industry}. Every topic must belong in 2025 or 2026."""
 
     r   = model.generate_content(
         prompt,
@@ -461,37 +471,103 @@ Make all 6 topics distinct — different angles, different subtopics within {ind
                 pass
         return []
 
-def ai_generate_content(topic, length, tone, language, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry, client_url):
-    model  = get_gemini()
-    prompt = f"""You are a senior content strategist writing for {client_name} in {industry}.
+def fetch_sitemap_pages(domain):
+    import xml.etree.ElementTree as ET
+    domain = clean_domain(domain)
+    urls   = []
+    candidates = [
+        "https://" + domain + "/sitemap.xml",
+        "https://" + domain + "/sitemap_index.xml",
+        "https://www." + domain + "/sitemap.xml",
+    ]
+    for sitemap_url in candidates:
+        try:
+            resp = requests.get(sitemap_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200 and "xml" in resp.headers.get("content-type",""):
+                root = ET.fromstring(resp.content)
+                ns   = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+                for sitemap in root.findall("sm:sitemap", ns):
+                    loc = sitemap.find("sm:loc", ns)
+                    if loc is not None and loc.text:
+                        try:
+                            sub = requests.get(loc.text, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+                            if sub.status_code == 200:
+                                sub_root = ET.fromstring(sub.content)
+                                for url in sub_root.findall("sm:url", ns):
+                                    l = url.find("sm:loc", ns)
+                                    if l is not None and l.text:
+                                        urls.append(l.text)
+                        except:
+                            pass
+                for url in root.findall("sm:url", ns):
+                    loc = url.find("sm:loc", ns)
+                    if loc is not None and loc.text:
+                        urls.append(loc.text)
+                if urls:
+                    break
+        except:
+            continue
+    seen, clean_urls = set(), []
+    for u in urls:
+        if u not in seen and len(clean_urls) < 150:
+            seen.add(u)
+            clean_urls.append(u)
+    return clean_urls
 
-Generate a complete content package as a single JSON object. Return ONLY valid JSON, no markdown fences.
 
-Specifications:
-- Topic: {topic}
-- Word count: {length} words
-- Tone: {tone}
-- Language: {language}
-- Brand terms (use naturally): {brand_terms}
-- AI prompts / questions to target: {target_prompts}
-- Primary keyword: {primary_kw}
-- Secondary keywords: {secondary_kws}
-- Client website: {client_url}
+def ai_generate_content(topic, length, tone, language, brand_terms, target_prompts, primary_kw, secondary_kws, client_name, industry, client_url, narrative="branded", eeat_mode=False, eeat_facts=None, sitemap_pages=None):
+    model      = get_gemini()
+    eeat_facts = eeat_facts or []
 
-Return this exact JSON structure:
-{{
-  "article": "Full article in markdown. Use ## for H2, ### for H3. Make headings bold: **Heading**. Bold every instance of the primary and secondary keywords using **keyword**. Primary keyword in title, first paragraph, and at least 2 subheadings. Brand terms natural not forced. Non-salesy conclusion. No byline, bio, or meta description.",
-  "internal_links": [
-    {{"anchor": "anchor text suggestion", "page_type": "e.g. project page / blog post / contact page", "reason": "one sentence why this link adds value"}},
-    {{"anchor": "anchor text suggestion", "page_type": "page type", "reason": "reason"}},
-    {{"anchor": "anchor text suggestion", "page_type": "page type", "reason": "reason"}}
-  ],
-  "schema_tags": [
-    {{"type": "Schema type e.g. Article / FAQPage / BreadcrumbList", "rationale": "one sentence why this schema applies", "example": "Short JSON-LD snippet showing the key fields to implement"}}
-  ]
-}}
+    narrative_map = {
+        "branded":     "Write as " + client_name + " speaking. Use we/our. Brand is central throughout.",
+        "mixed":       "Neutral third-party perspective. Mention " + client_name + " as one of several brands. Balanced.",
+        "non_branded": "Completely neutral educational article. Do NOT mention any brand names at all.",
+    }
+    narrative_instruction = narrative_map.get(narrative, narrative_map["branded"])
 
-Generate 3 internal link suggestions and 2-3 schema recommendations appropriate for this content and industry."""
+    eeat_block = ""
+    if eeat_mode and eeat_facts:
+        facts_str = "\n".join(["- " + f for f in eeat_facts if f.strip()])
+        eeat_block = (
+            "\nE-E-A-T BRAND FACTS — integrate all of these naturally into the article:\n" + facts_str +
+            "\nE-E-A-T rules: Experience=first-hand insights. Expertise=precise terminology + facts. "
+            "Authoritativeness=credible data. Trustworthiness=accurate, no unsupported superlatives."
+        )
+
+    if sitemap_pages:
+        pages_sample = "\n".join(sitemap_pages[:80])
+        link_instruction = (
+            "INTERNAL LINKS — use REAL pages from this sitemap:\n" + pages_sample +
+            "\nRecommend the 3 most contextually relevant actual URLs. Use the real URL, not a placeholder."
+        )
+        link_schema = '[{"url": "https://real-url-from-sitemap", "anchor": "natural anchor text", "reason": "why this page is relevant here"}]'
+    else:
+        link_instruction = "Suggest 3 internal links using typical page types for this industry."
+        link_schema = '[{"anchor": "anchor text", "page_type": "e.g. project page", "reason": "why relevant"}]'
+
+    prompt = (
+        "You are a senior content strategist. Generate a complete content package as a single JSON object. "
+        "Return ONLY valid JSON, no markdown fences.\n\n"
+        "Client: " + client_name + " | Industry: " + industry + " | Website: " + client_url + "\n"
+        "Topic: " + topic + "\n"
+        "Word count: " + str(length) + " | Tone: " + tone + " | Language: " + language + "\n"
+        "Primary keyword: " + primary_kw + " (bold every instance: **keyword**)\n"
+        "Secondary keywords: " + secondary_kws + " (bold every instance)\n"
+        "Brand terms: " + brand_terms + "\n"
+        "AI prompts to target: " + target_prompts + "\n\n"
+        "NARRATIVE: " + narrative.upper() + " — " + narrative_instruction + "\n"
+        + eeat_block + "\n\n"
+        + link_instruction + "\n\n"
+        "Return this exact JSON:\n"
+        "{\n"
+        '  \"article\": \"Full article markdown. ## H2, ### H3. Bold headings **Heading**. Bold all keywords. Primary keyword in title, first para, 2+ subheadings. Non-salesy conclusion. No byline or meta.\",' + "\n"
+        '  \"internal_links\": ' + link_schema + "," + "\n"
+        '  \"schema_tags\": [{"type": "Schema type", "rationale": "why it applies", "example": "JSON-LD snippet"}]' + "\n"
+        "}\n\n"
+        "Schema: always Article schema. Add FAQPage if questions answered. Add schemas that support E-E-A-T facts "
+        "(AggregateRating for awards, Dataset for statistics, etc). 2-4 schema types total."
+    )
 
     r    = model.generate_content(prompt, generation_config={"max_output_tokens": 8192})
     raw  = r.text.strip().replace("```json","").replace("```","").strip()
@@ -525,6 +601,38 @@ def init_state():
             st.session_state[k] = v
 
 init_state()
+
+# ── Password gate ─────────────────────────────────────────────────────────────
+
+def check_password():
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.markdown("""
+    <div style="max-width:400px;margin:6rem auto 0;text-align:center;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.25em;color:#ff6b2b;
+        text-transform:uppercase;margin-bottom:0.75rem;">Performics EXD · Publicis Groupe</div>
+        <div style="font-size:1.6rem;font-weight:800;color:#fff;margin-bottom:0.4rem;">
+        Backlink Intelligence</div>
+        <div style="font-size:0.82rem;color:#555;margin-bottom:2rem;">
+        Enter your access password to continue</div>
+    </div>""", unsafe_allow_html=True)
+
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        pwd = st.text_input("Password", type="password", label_visibility="collapsed",
+                            placeholder="Enter password…")
+        if st.button("→  Access Tool", use_container_width=True):
+            correct = st.secrets.get("APP_PASSWORD", "")
+            if pwd == correct:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    return False
+
+if not check_password():
+    st.stop()
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -704,10 +812,15 @@ if st.session_state.page == "input":
                 try:
                     inter = fetch_intersection(competitors, client_url)
                     raw.extend(inter)
-                    st.success(f"✓ Link gap: {len(inter)} opportunities found")
+                    if inter:
+                        st.success(f"✓ Link gap: {len(inter)} domains found")
+                    else:
+                        st.warning("⚠ Domain intersection returned 0 results — competitors may not share enough linking domains yet. Missed Opportunities will use referring domain data instead.")
                 except Exception as e:
                     errors.append(f"Domain intersection: {e}")
                     st.warning(f"⚠ Domain intersection failed: {e}")
+                    with st.expander("Debug: intersection error details"):
+                        st.code(str(e))
 
             with st.spinner("Fetching competitor referring domains…"):
                 try:
@@ -1355,11 +1468,11 @@ elif st.session_state.page == "content":
     # ── Content Brief Form ────────────────────────────────────────────────────
     c1, c2 = st.columns(2)
     with c1:
-        topic        = st.text_input("Article Topic", value=prefill_topic or "", placeholder="e.g. The future of sustainable real estate in the UAE")
-        primary_kw   = st.text_input("Primary Keyword", value=prefill_kw or "", placeholder="e.g. luxury real estate Dubai")
+        topic         = st.text_input("Article Topic", value=prefill_topic or "", placeholder="e.g. The future of sustainable real estate in the UAE")
+        primary_kw    = st.text_input("Primary Keyword", value=prefill_kw or "", placeholder="e.g. luxury real estate Dubai")
         secondary_kws = st.text_input("Secondary Keywords", placeholder="e.g. Dubai property investment, off-plan real estate UAE")
-        brand_terms  = st.text_input("Brand Terms", placeholder="e.g. Sobha Realty, Sobha Hartland")
-        content_lang = st.selectbox("Content Language", ["English", "Arabic", "French"])
+        brand_terms   = st.text_input("Brand Terms", placeholder="e.g. Sobha Realty, Sobha Hartland")
+        content_lang  = st.selectbox("Content Language", ["English", "Arabic", "French"])
     with c2:
         length         = st.number_input("Word Count", min_value=300, max_value=3000, value=800, step=100)
         tone           = st.selectbox("Tone of Voice", [
@@ -1369,7 +1482,83 @@ elif st.session_state.page == "content":
         target_prompts = st.text_area("AI Prompts / Questions to Target", height=160,
                                        placeholder="e.g. What is the best real estate developer in Dubai?\nWhy invest in Dubai property in 2025?")
 
+    st.markdown("<hr>", unsafe_allow_html=True)
+
+    # ── Narrative toggle ──────────────────────────────────────────────────────
+    st.markdown('<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#888;margin-bottom:0.75rem;">Narrative Mode</div>', unsafe_allow_html=True)
+
+    if "narrative_choice" not in st.session_state:
+        st.session_state.narrative_choice = "branded"
+
+    narr_defs = [
+        ("branded",     "Branded",     "Written as the brand speaking. Brand is central throughout.",         "#ff6b2b"),
+        ("mixed",       "Mixed",       "Brand mentioned alongside others. Neutral, balanced perspective.",     "#8b5cf6"),
+        ("non_branded", "Non-Branded", "No brand mentions. Pure educational, audience-first content.",        "#3b82f6"),
+    ]
+    nc1, nc2, nc3 = st.columns(3)
+    narr_cols = [nc1, nc2, nc3]
+    for idx, (val, label, desc, color) in enumerate(narr_defs):
+        with narr_cols[idx]:
+            selected = st.session_state.narrative_choice == val
+            bdr = color if selected else "#1e1e1e"
+            lbl_color = "#fff" if selected else "#555"
+            st.markdown(
+                '<div style="border:1px solid ' + bdr + ';border-radius:8px;padding:0.85rem 1rem;margin-bottom:0.5rem;background:' + ('rgba(0,0,0,0.3)' if selected else '#111') + ';">'
+                '<div style="font-size:0.78rem;font-weight:800;color:' + lbl_color + ';">' + label + '</div>'
+                '<div style="font-size:0.69rem;color:#555;margin-top:0.2rem;line-height:1.4;">' + desc + '</div>'
+                '</div>', unsafe_allow_html=True
+            )
+            if st.button("Select " + label, key="narr_" + val, use_container_width=True):
+                st.session_state.narrative_choice = val
+                st.rerun()
+
+    narrative = st.session_state.narrative_choice
     st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── E-E-A-T Mode ─────────────────────────────────────────────────────────
+    if "eeat_mode" not in st.session_state:
+        st.session_state.eeat_mode = False
+
+    eeat_col, _ = st.columns([1, 3])
+    with eeat_col:
+        btn_label = "✦  E-E-A-T Mode — ON" if st.session_state.eeat_mode else "◯  Make E-E-A-T Friendly"
+        if st.button(btn_label, key="toggle_eeat", use_container_width=True):
+            st.session_state.eeat_mode = not st.session_state.eeat_mode
+            st.rerun()
+
+    eeat_facts = []
+    if st.session_state.eeat_mode:
+        st.markdown(
+            '<div style="background:rgba(255,107,43,0.06);border:1px solid rgba(255,107,43,0.2);'
+            'border-radius:8px;padding:1rem 1.25rem;margin:0.75rem 0;">'
+            '<div style="font-size:0.72rem;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#ff6b2b;margin-bottom:0.4rem;">E-E-A-T Mode Active</div>'
+            '<div style="font-size:0.78rem;color:#888;line-height:1.5;">Add 3 brand facts or data points to weave into the article. These demonstrate Experience, Expertise, Authoritativeness, and Trustworthiness — and may trigger additional schema recommendations.</div>'
+            '</div>', unsafe_allow_html=True
+        )
+        fact1 = st.text_input("Brand Fact 1", placeholder="e.g. Sobha Realty has delivered 27,000+ units across 9 countries since 1976")
+        fact2 = st.text_input("Brand Fact 2", placeholder="e.g. Ranked #1 developer in Dubai for customer satisfaction by JLL 2025")
+        fact3 = st.text_input("Brand Fact 3", placeholder="e.g. 98.5% on-time delivery rate across all projects")
+        eeat_facts = [f for f in [fact1, fact2, fact3] if f.strip()]
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Sitemap fetch for internal linking ────────────────────────────────────
+    sitemap_pages = []
+    if "sitemap_cache" not in st.session_state:
+        st.session_state.sitemap_cache = {}
+
+    client_url_val = client.get("url","")
+    if client_url_val and client_url_val not in st.session_state.sitemap_cache:
+        with st.spinner("Fetching website pages for internal link analysis…"):
+            pages = fetch_sitemap_pages(client_url_val)
+            st.session_state.sitemap_cache[client_url_val] = pages
+            if pages:
+                st.success(f"✓ {len(pages)} pages found — internal links will use real URLs from your site")
+            else:
+                st.info("No sitemap found — internal links will use recommended page types instead")
+
+    sitemap_pages = st.session_state.sitemap_cache.get(client_url_val, [])
+
     gen = st.button("✦  Generate Content", use_container_width=True)
 
     if gen:
@@ -1382,7 +1571,11 @@ elif st.session_state.page == "content":
                         topic, length, tone, content_lang, brand_terms,
                         target_prompts, primary_kw, secondary_kws,
                         client.get("name",""), client.get("industry",""),
-                        client.get("url","")
+                        client.get("url",""),
+                        narrative=narrative,
+                        eeat_mode=st.session_state.eeat_mode,
+                        eeat_facts=eeat_facts,
+                        sitemap_pages=sitemap_pages
                     )
                     st.session_state.generated_content = content
                 except Exception as e:
